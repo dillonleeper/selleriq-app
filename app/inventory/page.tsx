@@ -58,8 +58,8 @@ export default function Inventory() {
   const [inventory, setInventory] = useState<InventoryRow[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [sortKey, setSortKey] = useState<SortKey>('available')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [sortKey, setSortKey] = useState<SortKey>('avg_daily_units')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
 
