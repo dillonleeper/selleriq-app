@@ -260,25 +260,6 @@ export default function Inventory() {
             ))}
           </div>
 
-          {/* Alert bar */}
-          {(outOfStock > 0 || critical > 0) && (
-            <div style={{
-              display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap',
-            }}>
-              {outOfStock > 0 && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  background: 'var(--red-light)', border: '1px solid rgba(220,38,38,0.2)',
-                  borderRadius: '8px', padding: '10px 16px', cursor: 'pointer',
-                }}
-                onClick={() => setStatusFilter(statusFilter === 'out_of_stock' ? 'all' : 'out_of_stock')}
-                >
-                  <AlertTriangle size={13} color="var(--red)" />
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--red)' }}>
-                    {outOfStock} SKU{outOfStock !== 1 ? 's' : ''} out of stock
-                  </span>
-                </div>
-              )}
               {critical > 0 && (
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: '8px',
