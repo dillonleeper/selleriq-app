@@ -260,19 +260,6 @@ export default function Inventory() {
             ))}
           </div>
 
-              {critical > 0 && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.2)',
-                  borderRadius: '8px', padding: '10px 16px', cursor: 'pointer',
-                }}
-                onClick={() => setStatusFilter(statusFilter === 'critical' ? 'all' : 'critical')}
-                >
-                  <TrendingDown size={13} color="#F97316" />
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#F97316' }}>
-                    {critical} SKU{critical !== 1 ? 's' : ''} critical (&lt;{CRITICAL_THRESHOLD} days)
-                  </span>
-
           {/* Search + Status filter */}
           <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
             <div style={{
