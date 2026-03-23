@@ -272,24 +272,6 @@ export default function Inventory() {
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#F97316' }}>
                     {critical} SKU{critical !== 1 ? 's' : ''} critical (&lt;{CRITICAL_THRESHOLD} days)
                   </span>
-                </div>
-              )}
-              {low > 0 && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  background: 'rgba(217,119,6,0.08)', border: '1px solid rgba(217,119,6,0.2)',
-                  borderRadius: '8px', padding: '10px 16px', cursor: 'pointer',
-                }}
-                onClick={() => setStatusFilter(statusFilter === 'low' ? 'all' : 'low')}
-                >
-                  <AlertTriangle size={13} color="var(--yellow)" />
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--yellow)' }}>
-                    {low} SKU{low !== 1 ? 's' : ''} low stock (&lt;{LOW_STOCK_THRESHOLD} days)
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Search + Status filter */}
           <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
