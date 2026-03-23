@@ -133,7 +133,7 @@ export default function Inventory() {
         const weekCount = salesInfo?.weeks.size || 0
         const avgDailyUnits = weekCount > 0 ? (totalUnits / (weekCount * 7)) : 0
         const available = row.available_quantity || 0
-        const doc = avgDailyUnits > 0 ? Math.round(available / avgDailyUnits) : null
+        const doc = avgDailyUnits > 0 ? Math.round((row.fulfillable_quantity || 0) / avgDailyUnits) : null
 
         return {
           sku: row.sku || '',
