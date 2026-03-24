@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
-  ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download
+  ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download, Upload
 } from 'lucide-react'
 
 // ─── Constants ───────────────────────────────────────────────
@@ -58,6 +58,8 @@ type SupplierReplenRow = {
   title: string
   asin: string
   total_fba: number
+  warehouse_qty: number
+  total_inventory: number
   avg_daily_units: number
   days_of_cover_total: number | null
   units_to_order: number
@@ -154,9 +156,69 @@ export default function Inventory() {
   const [showFbaConfirm, setShowFbaConfirm]       = useState(false)
   const [showSupConfirm, setShowSupConfirm]       = useState(false)
 
+  // Warehouse inventory state (persisted via localStorage)
+  const [warehouseQty, setWarehouseQty] = useState<Record<string, number>>(() => {
+    if (typeof window === 'undefined') return {}
+    try { return JSON.parse(localStorage.getItem('selleriq_warehouse_qty') || '{}') } catch { return {} }
+  })
+  const [warehouseUploadDate, setWarehouseUploadDate] = useState<string>(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('selleriq_warehouse_upload_date') || '' : ''
+  )
+  const [unmatchedSkus, setUnmatchedSkus] = useState<string[]>([])
+  const [showUnmatched, setShowUnmatched] = useState(false)
+
   // Derived supplier values
   const supplierLeadDays   = prodDays + shipDays
   const supplierOrderTarget = prodDays + shipDays + bufferDays
+
+  // Download template CSV
+  const downloadTemplate = () => {
+    const allSkus = [...new Set(inventory.map(r => r.sku).filter(Boolean))]
+    const rows = allSkus.map(sku => `${sku},0`)
+    const csv = 'sku,warehouse_qty\n' + rows.join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = 'selleriq-warehouse-template.csv'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Handle warehouse CSV upload
+  const handleWarehouseUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      const text = evt.target?.result as string
+      const lines = text.trim().split('\n')
+      const header = lines[0].toLowerCase().replace(/\s/g, '')
+      if (!header.includes('sku') || !header.includes('warehouse_qty')) {
+        alert('Invalid CSV format. Please use the template with columns: sku, warehouse_qty')
+        return
+      }
+      const newQty: Record<string, number> = {}
+      const unmatched: string[] = []
+      const knownSkus = new Set(inventory.map(r => r.sku))
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(',')
+        if (parts.length < 2) continue
+        const sku = parts[0].trim()
+        const qty = parseInt(parts[1].trim(), 10)
+        if (!sku) continue
+        newQty[sku] = isNaN(qty) ? 0 : qty
+        if (!knownSkus.has(sku)) unmatched.push(sku)
+      }
+      setWarehouseQty(newQty)
+      setUnmatchedSkus(unmatched)
+      if (unmatched.length > 0) setShowUnmatched(true)
+      const uploadDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      setWarehouseUploadDate(uploadDate)
+      localStorage.setItem('selleriq_warehouse_qty', JSON.stringify(newQty))
+      localStorage.setItem('selleriq_warehouse_upload_date', uploadDate)
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
 
   // Apply FBA target
   const applyFbaTarget = () => {
@@ -362,18 +424,19 @@ export default function Inventory() {
 
   // ─── Supplier Replenishment rows ──────────────────────────
   // Deduplicate by SKU (combine US+CA FBA inventory)
-  const skuMap: Record<string, { title: string, asin: string, total_fba: number, avg_daily: number }> = {}
+  const skuMap: Record<string, { title: string, asin: string, total_fba: number, warehouse_qty: number, avg_daily: number }> = {}
   for (const r of inventory) {
-    if (!skuMap[r.sku]) skuMap[r.sku] = { title: r.title, asin: r.asin, total_fba: 0, avg_daily: 0 }
+    if (!skuMap[r.sku]) skuMap[r.sku] = { title: r.title, asin: r.asin, total_fba: 0, warehouse_qty: warehouseQty[r.sku] || 0, avg_daily: 0 }
     skuMap[r.sku].total_fba   += r.total_fba
     skuMap[r.sku].avg_daily   += r.avg_daily_units
   }
 
   const supplierRows: SupplierReplenRow[] = Object.entries(skuMap)
     .map(([sku, data]) => {
-      const doc = data.avg_daily > 0 ? Math.round(data.total_fba / data.avg_daily) : null
+      const totalInventory = data.total_fba + data.warehouse_qty
+      const doc = data.avg_daily > 0 ? Math.round(totalInventory / data.avg_daily) : null
       const unitsToOrder = data.avg_daily > 0
-        ? Math.max(0, Math.round(supplierOrderTarget * data.avg_daily) - data.total_fba)
+        ? Math.max(0, Math.round(supplierOrderTarget * data.avg_daily) - totalInventory)
         : 0
       const urgency = (doc === null || doc < supplierLeadDays ? 'critical' : doc < supplierOrderTarget ? 'reorder' : 'healthy') as 'critical' | 'reorder' | 'healthy'
       // Reorder by = today + (days_of_cover - lead_time), so you order before stockout
@@ -386,6 +449,8 @@ export default function Inventory() {
         title:              data.title,
         asin:               data.asin,
         total_fba:          data.total_fba,
+        warehouse_qty:      data.warehouse_qty,
+        total_inventory:    totalInventory,
         avg_daily_units:    Math.round(data.avg_daily * 10) / 10,
         days_of_cover_total: doc,
         units_to_order:     unitsToOrder,
@@ -824,6 +889,68 @@ export default function Inventory() {
                 </div>
               </div>
 
+              {/* Warehouse Inventory Upload */}
+              <div style={{ marginBottom: '14px', padding: '14px 16px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                      Warehouse Inventory
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+                      {warehouseUploadDate
+                        ? <>Last uploaded: <strong>{warehouseUploadDate}</strong> · {Object.keys(warehouseQty).length} SKUs loaded</>
+                        : 'No warehouse data uploaded yet — upload a CSV to include warehouse stock in reorder calculations'
+                      }
+                      {unmatchedSkus.length > 0 && (
+                        <span
+                          onClick={() => setShowUnmatched(true)}
+                          style={{ marginLeft: '8px', color: '#F97316', cursor: 'pointer', textDecoration: 'underline' }}>
+                          {unmatchedSkus.length} unmatched SKU{unmatchedSkus.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={downloadTemplate} style={{
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)',
+                      background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer'
+                    }}>
+                      <Download size={12} /> Download Template
+                    </button>
+                    <label style={{
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--accent-border)',
+                      background: 'var(--accent-light)', color: 'var(--accent)', fontSize: '12px',
+                      cursor: 'pointer', fontWeight: 500
+                    }}>
+                      <Upload size={12} /> Upload CSV
+                      <input type="file" accept=".csv" onChange={handleWarehouseUpload} style={{ display: 'none' }} />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Unmatched SKUs dialog */}
+              {showUnmatched && unmatchedSkus.length > 0 && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '400px', maxHeight: '60vh', overflow: 'auto', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px' }}>Unmatched SKUs</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                      These SKUs were in your CSV but not found in SellerIQ. Check for typos or missing products.
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '20px' }}>
+                      {unmatchedSkus.map(sku => (
+                        <div key={sku} style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', padding: '4px 8px', background: 'var(--bg-hover)', borderRadius: '4px', color: '#F97316' }}>{sku}</div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button onClick={() => setShowUnmatched(false)} style={{ padding: '7px 16px', borderRadius: '7px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Got it</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Supplier Confirm Dialog */}
               {showSupConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -870,8 +997,10 @@ export default function Inventory() {
                         <th style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
                         <th style={{ ...thBase, textAlign: 'center' }}>Urgency</th>
                         <th style={{ ...thSortable(supSortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleSupSort('total_fba')}>
-                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total FBA <SortIcon col="total_fba" cur={supSortKey} dir={supSortDir} /></span>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>FBA Inv <SortIcon col="total_fba" cur={supSortKey} dir={supSortDir} /></span>
                         </th>
+                        <th style={{ ...thBase, textAlign: 'right', color: '#A78BFA' }}>Warehouse</th>
+                        <th style={{ ...thBase, textAlign: 'right', fontWeight: 700 }}>Total Inv</th>
                         <th style={{ ...thSortable(supSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSupSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={supSortKey} dir={supSortDir} /></span>
                         </th>
@@ -899,6 +1028,8 @@ export default function Inventory() {
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                             </td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.warehouse_qty > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.warehouse_qty > 0 ? fmt(row.warehouse_qty) : '—'}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover_total === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
