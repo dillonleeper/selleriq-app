@@ -12,11 +12,10 @@ import {
 const CAD_TO_USD = 0.74
 const LOW_STOCK_THRESHOLD   = 30   // days of cover below this = low stock
 const CRITICAL_THRESHOLD    = 14   // days of cover below this = critical
-const FBA_TARGET_DAYS       = 60   // target days of cover at FBA
-const FBA_REORDER_THRESHOLD = 60   // flag for FBA replenishment below this
-const SUPPLIER_LEAD_DAYS    = 70   // 42 days production + 28 days shipping
-const SUPPLIER_BUFFER_DAYS  = 60   // extra buffer on top of lead time
-const SUPPLIER_ORDER_TARGET = SUPPLIER_LEAD_DAYS + SUPPLIER_BUFFER_DAYS // 130 days total
+const FBA_TARGET_DEFAULT      = 60
+const SUPPLIER_PROD_DEFAULT   = 42
+const SUPPLIER_SHIP_DEFAULT   = 28
+const SUPPLIER_BUFFER_DEFAULT = 60
 
 type TabType = 'inventory' | 'fba' | 'supplier'
 
@@ -86,16 +85,7 @@ function getStatus(available: number, doc: number | null): InventoryRow['status'
   if (doc !== null && doc < LOW_STOCK_THRESHOLD) return 'low'
   return 'healthy'
 }
-function getFbaUrgency(doc: number | null): FbaReplenRow['urgency'] {
-  if (doc === null || doc < CRITICAL_THRESHOLD) return 'critical'
-  if (doc < FBA_REORDER_THRESHOLD) return 'reorder'
-  return 'healthy'
-}
-function getSupplierUrgency(doc: number | null): SupplierReplenRow['urgency'] {
-  if (doc === null || doc < SUPPLIER_LEAD_DAYS) return 'critical'
-  if (doc < SUPPLIER_ORDER_TARGET) return 'reorder'
-  return 'healthy'
-}
+// urgency computed inline using state-driven thresholds
 function addDays(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() + days)
@@ -147,6 +137,44 @@ export default function Inventory() {
   const [fbaFilter, setFbaFilter]     = useState<string>('all')
   const [supFilter, setSupFilter]     = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
+
+  // ── User-configurable replenishment settings (persisted) ──
+  const [fbaTarget, setFbaTarget]           = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_fba_target') || FBA_TARGET_DEFAULT) : FBA_TARGET_DEFAULT)
+  const [prodDays, setProdDays]             = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_prod_days') || SUPPLIER_PROD_DEFAULT) : SUPPLIER_PROD_DEFAULT)
+  const [shipDays, setShipDays]             = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_ship_days') || SUPPLIER_SHIP_DEFAULT) : SUPPLIER_SHIP_DEFAULT)
+  const [bufferDays, setBufferDays]         = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_buffer_days') || SUPPLIER_BUFFER_DEFAULT) : SUPPLIER_BUFFER_DEFAULT)
+
+  // Pending input values (before confirmation)
+  const [pendingFba, setPendingFba]         = useState<number>(fbaTarget)
+  const [pendingProd, setPendingProd]       = useState<number>(prodDays)
+  const [pendingShip, setPendingShip]       = useState<number>(shipDays)
+  const [pendingBuffer, setPendingBuffer]   = useState<number>(bufferDays)
+
+  // Confirmation dialog state
+  const [showFbaConfirm, setShowFbaConfirm]       = useState(false)
+  const [showSupConfirm, setShowSupConfirm]       = useState(false)
+
+  // Derived supplier values
+  const supplierLeadDays   = prodDays + shipDays
+  const supplierOrderTarget = prodDays + shipDays + bufferDays
+
+  // Apply FBA target
+  const applyFbaTarget = () => {
+    setFbaTarget(pendingFba)
+    localStorage.setItem('selleriq_fba_target', String(pendingFba))
+    setShowFbaConfirm(false)
+  }
+
+  // Apply supplier settings
+  const applySupplierSettings = () => {
+    setProdDays(pendingProd)
+    setShipDays(pendingShip)
+    setBufferDays(pendingBuffer)
+    localStorage.setItem('selleriq_prod_days',   String(pendingProd))
+    localStorage.setItem('selleriq_ship_days',   String(pendingShip))
+    localStorage.setItem('selleriq_buffer_days', String(pendingBuffer))
+    setShowSupConfirm(false)
+  }
 
   // ─── Data loading ─────────────────────────────────────────
   useEffect(() => {
@@ -296,9 +324,9 @@ export default function Inventory() {
       const totalInv = r.total_fba
       // Days cover = total inventory / avg daily
       const fbaDoc = r.avg_daily_units > 0 ? Math.round(totalInv / r.avg_daily_units) : null
-      // Units to send = units needed to reach 60d target minus total inventory already at FBA
+      // Units to send = units needed to reach fbaTarget days minus total inventory already at FBA
       const unitsToSend = r.avg_daily_units > 0
-        ? Math.max(0, Math.round(FBA_TARGET_DAYS * r.avg_daily_units) - totalInv)
+        ? Math.max(0, Math.round(fbaTarget * r.avg_daily_units) - totalInv)
         : 0
       return {
         sku:            r.sku,
@@ -313,10 +341,10 @@ export default function Inventory() {
         avg_daily_units: r.avg_daily_units,
         days_of_cover:  fbaDoc,
         units_to_send:  unitsToSend,
-        urgency:        getFbaUrgency(fbaDoc),
+        urgency:        fbaDoc === null || fbaDoc < 14 ? 'critical' : fbaDoc < fbaTarget ? 'reorder' : 'healthy',
       }
     })
-    .filter(r => r.urgency !== 'healthy' || r.units_to_send > 0)
+    .filter(r => r.urgency !== 'healthy')
     .filter(r => {
       if (fbaFilter !== 'all' && r.urgency !== fbaFilter) return false
       if (search) {
@@ -345,12 +373,12 @@ export default function Inventory() {
     .map(([sku, data]) => {
       const doc = data.avg_daily > 0 ? Math.round(data.total_fba / data.avg_daily) : null
       const unitsToOrder = data.avg_daily > 0
-        ? Math.max(0, Math.round(SUPPLIER_ORDER_TARGET * data.avg_daily) - data.total_fba)
+        ? Math.max(0, Math.round(supplierOrderTarget * data.avg_daily) - data.total_fba)
         : 0
-      const urgency = getSupplierUrgency(doc)
+      const urgency = doc === null || doc < supplierLeadDays ? 'critical' : doc < supplierOrderTarget ? 'reorder' : 'healthy'
       // Reorder by = today + (days_of_cover - lead_time), so you order before stockout
-      const reorderBy = doc !== null && doc > SUPPLIER_LEAD_DAYS
-        ? addDays(doc - SUPPLIER_LEAD_DAYS)
+      const reorderBy = doc !== null && doc > supplierLeadDays
+        ? addDays(doc - supplierLeadDays)
         : urgency === 'critical' ? 'Order Now' : null
 
       return {
@@ -618,7 +646,7 @@ export default function Inventory() {
                 {[
                   { label: 'SKUs Need Attention', value: fbaRows.filter(r => r.urgency !== 'healthy').length, color: 'var(--red)' },
                   { label: 'Total Units to Send', value: fmt(fbaRows.reduce((s, r) => s + r.units_to_send, 0)), color: 'var(--accent)' },
-                  { label: 'Target Days Cover',   value: `${FBA_TARGET_DAYS} days`, color: 'var(--green)' },
+                  { label: 'Target Days Cover',   value: `${fbaTarget} days`, color: 'var(--green)' },
                 ].map((card, i) => (
                   <div key={i} className="card" style={{ padding: '16px' }}>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>{card.label}</div>
@@ -627,11 +655,41 @@ export default function Inventory() {
                 ))}
               </div>
 
-              {/* Description */}
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', padding: '10px 14px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                Shows SKUs where total FBA inventory (available + reserved + inbound) is below <strong>{FBA_TARGET_DAYS} days</strong> of cover.
-                Units to send = units needed to reach {FBA_TARGET_DAYS} days at current sales velocity.
+              {/* FBA Target Input */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px', padding: '12px 16px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Target Coverage:</span>
+                <input
+                  type="number" min={1} max={365}
+                  value={pendingFba}
+                  onChange={e => setPendingFba(Number(e.target.value))}
+                  style={{ width: '70px', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', textAlign: 'center' }}
+                />
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>days</span>
+                {pendingFba !== fbaTarget && (
+                  <button onClick={() => setShowFbaConfirm(true)} style={{ padding: '5px 14px', borderRadius: '6px', border: '1px solid var(--accent-border)', background: 'var(--accent-light)', color: 'var(--accent)', fontSize: '12px', fontWeight: 500, cursor: 'pointer' }}>
+                    Apply
+                  </button>
+                )}
+                <span style={{ fontSize: '11px', color: 'var(--text-dim)', marginLeft: 'auto' }}>
+                  Currently set to <strong>{fbaTarget} days</strong> · Units to Send adjusts automatically
+                </span>
               </div>
+
+              {/* FBA Confirm Dialog */}
+              {showFbaConfirm && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '360px', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px' }}>Update FBA Target?</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px' }}>
+                      Set target coverage to <strong>{pendingFba} days</strong> for all SKUs? Units to Send will recalculate immediately.
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button onClick={() => setShowFbaConfirm(false)} style={{ padding: '7px 16px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+                      <button onClick={applyFbaTarget} style={{ padding: '7px 16px', borderRadius: '7px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Confirm for All SKUs</button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Search + Filter + Export */}
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
@@ -707,7 +765,7 @@ export default function Inventory() {
                       })}
                     </tbody>
                   </table>
-                  {fbaRows.length === 0 && <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>All SKUs are above the {FBA_TARGET_DAYS}-day cover target 🎉</div>}
+                  {fbaRows.length === 0 && <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>All SKUs are above the {fbaTarget}-day cover target 🎉</div>}
                 </div>
               </div>
             </>
@@ -721,7 +779,7 @@ export default function Inventory() {
                 {[
                   { label: 'SKUs Need Reorder',   value: supplierRows.filter(r => r.urgency !== 'healthy').length, color: 'var(--red)' },
                   { label: 'Total Units to Order', value: fmt(supplierRows.reduce((s, r) => s + r.units_to_order, 0)), color: 'var(--accent)' },
-                  { label: 'Total Lead Time',      value: `${SUPPLIER_LEAD_DAYS} days`, color: 'var(--text-muted)' },
+                  { label: 'Total Lead Time',      value: `${supplierLeadDays} days`, color: 'var(--text-muted)' },
                 ].map((card, i) => (
                   <div key={i} className="card" style={{ padding: '16px' }}>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>{card.label}</div>
@@ -730,12 +788,61 @@ export default function Inventory() {
                 ))}
               </div>
 
-              {/* Description */}
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', padding: '10px 14px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                Based on <strong>42 days production + 28 days shipping = {SUPPLIER_LEAD_DAYS} days total lead time</strong>.
-                Units to order = units needed to cover lead time + {FBA_TARGET_DAYS}-day FBA buffer ({SUPPLIER_ORDER_TARGET} days total).
-                FBA inventory combines US + CA.
+              {/* Supplier Settings Inputs */}
+              <div style={{ marginBottom: '14px', padding: '14px 16px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Production', value: pendingProd, setter: setPendingProd, tip: 'Days for supplier to manufacture' },
+                    { label: 'Shipping',   value: pendingShip, setter: setPendingShip, tip: 'Days from factory to your warehouse' },
+                    { label: 'Buffer',     value: pendingBuffer, setter: setPendingBuffer, tip: 'Extra days of FBA stock to maintain as safety net' },
+                  ].map(({ label, value, setter, tip }) => (
+                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>{label}:</span>
+                      <input
+                        type="number" min={1} max={365}
+                        value={value}
+                        onChange={e => setter(Number(e.target.value))}
+                        title={tip}
+                        style={{ width: '60px', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', textAlign: 'center' }}
+                      />
+                      <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>days</span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '4px' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                      Total: <strong style={{ color: 'var(--text-primary)' }}>{pendingProd + pendingShip + pendingBuffer} days</strong>
+                    </span>
+                    {(pendingProd !== prodDays || pendingShip !== shipDays || pendingBuffer !== bufferDays) && (
+                      <button onClick={() => setShowSupConfirm(true)} style={{ padding: '5px 14px', borderRadius: '6px', border: '1px solid var(--accent-border)', background: 'var(--accent-light)', color: 'var(--accent)', fontSize: '12px', fontWeight: 500, cursor: 'pointer' }}>
+                        Apply
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-dim)' }}>
+                  Reorder triggers when days of cover &lt; <strong>{supplierLeadDays} days</strong> (lead time). Order quantity covers <strong>{supplierOrderTarget} days</strong> total. FBA inventory combines US + CA.
+                </div>
               </div>
+
+              {/* Supplier Confirm Dialog */}
+              {showSupConfirm && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '380px', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px' }}>Update Supplier Settings?</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>Apply these settings for all SKUs?</div>
+                    <div style={{ fontSize: '13px', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div>Production: <strong>{pendingProd} days</strong></div>
+                      <div>Shipping: <strong>{pendingShip} days</strong></div>
+                      <div>Buffer: <strong>{pendingBuffer} days</strong></div>
+                      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '6px', marginTop: '2px' }}>Total order target: <strong>{pendingProd + pendingShip + pendingBuffer} days</strong></div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button onClick={() => setShowSupConfirm(false)} style={{ padding: '7px 16px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+                      <button onClick={applySupplierSettings} style={{ padding: '7px 16px', borderRadius: '7px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Confirm for All SKUs</button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Search + Filter + Export */}
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
