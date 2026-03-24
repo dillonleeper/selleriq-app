@@ -102,7 +102,15 @@ function addDays(days: number): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 function exportCSV(headers: string[], rows: (string | number)[][], filename: string) {
-  const csv = [headers, ...rows].map(r => r.join(',')).join('\n')
+  const escapeField = (val: string | number) => {
+    const str = String(val)
+    // Wrap in quotes if contains comma, quote, or newline
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return '"' + str.replace(/"/g, '""') + '"'
+    }
+    return str
+  }
+  const csv = [headers, ...rows].map(r => r.map(escapeField).join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -635,7 +643,7 @@ export default function Inventory() {
                 <UrgencyFilter counts={fbaUrgencyCounts} current={fbaFilter} onChange={setFbaFilter} />
                 <button onClick={() => exportCSV(
                   ['SKU', 'Title', 'Marketplace', 'Total Inventory', 'Inbound', 'Avg Daily Units', 'Days Cover', 'Units to Send', 'Urgency'],
-                  fbaRows.map(r => [r.sku, `"${r.title}"`, r.marketplace, r.total_inventory, r.inbound, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
+                  fbaRows.map(r => [r.sku, r.title, r.marketplace, r.total_inventory, r.inbound, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
                   'selleriq-fba-replenishment.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
                   <Download size={12} /> Export
@@ -739,7 +747,7 @@ export default function Inventory() {
                 <UrgencyFilter counts={supUrgencyCounts} current={supFilter} onChange={setSupFilter} />
                 <button onClick={() => exportCSV(
                   ['SKU', 'Title', 'Total FBA (US+CA)', 'Avg Daily Units', 'Days Cover', 'Units to Order', 'Reorder By', 'Urgency'],
-                  supplierRows.map(r => [r.sku, `"${r.title}"`, r.total_fba, r.avg_daily_units, r.days_of_cover_total ?? '', r.units_to_order, r.reorder_by ?? '', r.urgency]),
+                  supplierRows.map(r => [r.sku, r.title, r.total_fba, r.avg_daily_units, r.days_of_cover_total ?? '', r.units_to_order, r.reorder_by ?? '', r.urgency]),
                   'selleriq-supplier-reorder.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
                   <Download size={12} /> Export
