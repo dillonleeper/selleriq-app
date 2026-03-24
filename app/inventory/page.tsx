@@ -44,6 +44,7 @@ type FbaReplenRow = {
   asin: string
   marketplace: string
   total_fba: number
+  inbound: number
   avg_daily_units: number
   days_of_cover: number | null
   units_to_send: number
@@ -63,7 +64,7 @@ type SupplierReplenRow = {
 }
 
 type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
-type FbaSortKey = 'sku' | 'total_fba' | 'avg_daily_units' | 'days_of_cover' | 'units_to_send'
+type FbaSortKey = 'sku' | 'total_fba' | 'inbound' | 'avg_daily_units' | 'days_of_cover' | 'units_to_send'
 type SupplierSortKey = 'sku' | 'total_fba' | 'avg_daily_units' | 'days_of_cover_total' | 'units_to_order'
 type SortDir = 'asc' | 'desc'
 
@@ -218,7 +219,8 @@ export default function Inventory() {
         const inbound    = row.total_inbound_quantity || 0
         const reserved   = row.reserved_quantity || 0
         const totalFba   = fulfillable + inbound + reserved
-        const doc = avgDailyUnits > 0 ? Math.round(totalFba / avgDailyUnits) : null
+        // Days of cover uses fulfillable + inbound only (excludes reserved)
+        const doc = avgDailyUnits > 0 ? Math.round((fulfillable + inbound) / avgDailyUnits) : null
 
         return {
           sku:           row.sku || '',
@@ -279,8 +281,9 @@ export default function Inventory() {
   // One row per SKU+marketplace, only show SKUs that need attention
   const fbaRows: FbaReplenRow[] = inventory
     .map(r => {
+      // Units to send = units needed to reach target, accounting for fulfillable + inbound already at FBA
       const unitsToSend = r.avg_daily_units > 0
-        ? Math.max(0, Math.round(FBA_TARGET_DAYS * r.avg_daily_units) - r.total_fba)
+        ? Math.max(0, Math.round(FBA_TARGET_DAYS * r.avg_daily_units) - (r.fulfillable + r.inbound))
         : 0
       return {
         sku:            r.sku,
@@ -288,6 +291,7 @@ export default function Inventory() {
         asin:           r.asin,
         marketplace:    r.marketplace,
         total_fba:      r.total_fba,
+        inbound:        r.inbound,
         avg_daily_units: r.avg_daily_units,
         days_of_cover:  r.days_of_cover,
         units_to_send:  unitsToSend,
@@ -637,7 +641,10 @@ export default function Inventory() {
                         <th style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
                         <th style={{ ...thBase, textAlign: 'center' }}>Urgency</th>
                         <th style={{ ...thSortable(fbaSortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleFbaSort('total_fba')}>
-                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total FBA <SortIcon col="total_fba" cur={fbaSortKey} dir={fbaSortDir} /></span>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Fulfillable <SortIcon col="total_fba" cur={fbaSortKey} dir={fbaSortDir} /></span>
+                        </th>
+                        <th style={{ ...thSortable(fbaSortKey === 'inbound'), textAlign: 'right' }} onClick={() => handleFbaSort('inbound')}>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Inbound <SortIcon col="inbound" cur={fbaSortKey} dir={fbaSortDir} /></span>
                         </th>
                         <th style={{ ...thSortable(fbaSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleFbaSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={fbaSortKey} dir={fbaSortDir} /></span>
@@ -665,6 +672,7 @@ export default function Inventory() {
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                             </td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
@@ -764,6 +772,7 @@ export default function Inventory() {
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                             </td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover_total === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
