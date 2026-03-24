@@ -772,7 +772,6 @@ export default function Inventory() {
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                             </td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover_total === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
