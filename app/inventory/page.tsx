@@ -341,7 +341,7 @@ export default function Inventory() {
         avg_daily_units: r.avg_daily_units,
         days_of_cover:  fbaDoc,
         units_to_send:  unitsToSend,
-        urgency:        fbaDoc === null || fbaDoc < 14 ? 'critical' : fbaDoc < fbaTarget ? 'reorder' : 'healthy',
+        urgency:        (fbaDoc === null || fbaDoc < 14 ? 'critical' : fbaDoc < fbaTarget ? 'reorder' : 'healthy') as 'critical' | 'reorder' | 'healthy',
       }
     })
     .filter(r => r.urgency !== 'healthy')
@@ -375,7 +375,7 @@ export default function Inventory() {
       const unitsToOrder = data.avg_daily > 0
         ? Math.max(0, Math.round(supplierOrderTarget * data.avg_daily) - data.total_fba)
         : 0
-      const urgency = doc === null || doc < supplierLeadDays ? 'critical' : doc < supplierOrderTarget ? 'reorder' : 'healthy'
+      const urgency = (doc === null || doc < supplierLeadDays ? 'critical' : doc < supplierOrderTarget ? 'reorder' : 'healthy') as 'critical' | 'reorder' | 'healthy'
       // Reorder by = today + (days_of_cover - lead_time), so you order before stockout
       const reorderBy = doc !== null && doc > supplierLeadDays
         ? addDays(doc - supplierLeadDays)
