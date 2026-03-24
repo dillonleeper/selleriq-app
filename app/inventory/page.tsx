@@ -43,7 +43,7 @@ type FbaReplenRow = {
   title: string
   asin: string
   marketplace: string
-  fulfillable: number
+  total_inventory: number
   inbound: number
   avg_daily_units: number
   days_of_cover: number | null
@@ -64,7 +64,7 @@ type SupplierReplenRow = {
 }
 
 type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
-type FbaSortKey = 'sku' | 'fulfillable' | 'inbound' | 'avg_daily_units' | 'days_of_cover' | 'units_to_send'
+type FbaSortKey = 'sku' | 'total_inventory' | 'inbound' | 'avg_daily_units' | 'days_of_cover' | 'units_to_send'
 type SupplierSortKey = 'sku' | 'total_fba' | 'avg_daily_units' | 'days_of_cover_total' | 'units_to_order'
 type SortDir = 'asc' | 'desc'
 
@@ -219,8 +219,8 @@ export default function Inventory() {
         const inbound    = row.total_inbound_quantity || 0
         const reserved   = row.reserved_quantity || 0
         const totalFba   = fulfillable + inbound + reserved
-        // Days of cover uses fulfillable + inbound only (excludes reserved)
-        const doc = avgDailyUnits > 0 ? Math.round((fulfillable + inbound) / avgDailyUnits) : null
+        // Days of cover uses total inventory: fulfillable + inbound + reserved
+        const doc = avgDailyUnits > 0 ? Math.round(totalFba / avgDailyUnits) : null
 
         return {
           sku:           row.sku || '',
@@ -281,18 +281,20 @@ export default function Inventory() {
   // One row per SKU+marketplace, only show SKUs that need attention
   const fbaRows: FbaReplenRow[] = inventory
     .map(r => {
-      // Units to send = units needed to reach 60d target minus what's already at FBA (fulfillable + inbound)
+      // Total inventory = fulfillable + inbound + reserved (all units at or coming to FBA)
+      const totalInv = r.total_fba
+      // Days cover = total inventory / avg daily
+      const fbaDoc = r.avg_daily_units > 0 ? Math.round(totalInv / r.avg_daily_units) : null
+      // Units to send = units needed to reach 60d target minus total inventory already at FBA
       const unitsToSend = r.avg_daily_units > 0
-        ? Math.max(0, Math.round(FBA_TARGET_DAYS * r.avg_daily_units) - (r.fulfillable + r.inbound))
+        ? Math.max(0, Math.round(FBA_TARGET_DAYS * r.avg_daily_units) - totalInv)
         : 0
-      // Days cover = (fulfillable + inbound) / avg daily — matches inventory snapshot formula
-      const fbaDoc = r.avg_daily_units > 0 ? Math.round((r.fulfillable + r.inbound) / r.avg_daily_units) : null
       return {
         sku:            r.sku,
         title:          r.title,
         asin:           r.asin,
         marketplace:    r.marketplace,
-        fulfillable:    r.fulfillable,
+        total_inventory: totalInv,
         inbound:        r.inbound,
         avg_daily_units: r.avg_daily_units,
         days_of_cover:  fbaDoc,
@@ -571,7 +573,7 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'center' }}>
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: sc.bg, color: sc.color, whiteSpace: 'nowrap' }}>{sc.label}</span>
                             </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.fulfillable)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_inventory)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: row.available === 0 ? 'var(--red)' : 'var(--text-primary)' }}>{fmt(row.available)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.reserved)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
@@ -613,7 +615,7 @@ export default function Inventory() {
 
               {/* Description */}
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', padding: '10px 14px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                Shows SKUs where FBA inventory (fulfillable + inbound + reserved) is below <strong>{FBA_TARGET_DAYS} days</strong> of cover.
+                Shows SKUs where total FBA inventory (available + reserved + inbound) is below <strong>{FBA_TARGET_DAYS} days</strong> of cover.
                 Units to send = units needed to reach {FBA_TARGET_DAYS} days at current sales velocity.
               </div>
 
@@ -626,8 +628,8 @@ export default function Inventory() {
                 </div>
                 <UrgencyFilter counts={fbaUrgencyCounts} current={fbaFilter} onChange={setFbaFilter} />
                 <button onClick={() => exportCSV(
-                  ['SKU', 'Title', 'Marketplace', 'Fulfillable', 'Inbound', 'Avg Daily Units', 'Days Cover', 'Units to Send', 'Urgency'],
-                  fbaRows.map(r => [r.sku, `"${r.title}"`, r.marketplace, r.fulfillable, r.inbound, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
+                  ['SKU', 'Title', 'Marketplace', 'Total Inventory', 'Inbound', 'Avg Daily Units', 'Days Cover', 'Units to Send', 'Urgency'],
+                  fbaRows.map(r => [r.sku, `"${r.title}"`, r.marketplace, r.total_inventory, r.inbound, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
                   'selleriq-fba-replenishment.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
                   <Download size={12} /> Export
@@ -642,8 +644,8 @@ export default function Inventory() {
                       <tr>
                         <th style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
                         <th style={{ ...thBase, textAlign: 'center' }}>Urgency</th>
-                        <th style={{ ...thSortable(fbaSortKey === 'fulfillable'), textAlign: 'right' }} onClick={() => handleFbaSort('fulfillable')}>
-                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Fulfillable <SortIcon col="fulfillable" cur={fbaSortKey} dir={fbaSortDir} /></span>
+                        <th style={{ ...thSortable(fbaSortKey === 'total_inventory'), textAlign: 'right' }} onClick={() => handleFbaSort('total_inventory')}>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total Inv <SortIcon col="total_inventory" cur={fbaSortKey} dir={fbaSortDir} /></span>
                         </th>
                         <th style={{ ...thSortable(fbaSortKey === 'inbound'), textAlign: 'right' }} onClick={() => handleFbaSort('inbound')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Inbound <SortIcon col="inbound" cur={fbaSortKey} dir={fbaSortDir} /></span>
@@ -673,7 +675,7 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'center' }}>
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                             </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.fulfillable)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_inventory)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
