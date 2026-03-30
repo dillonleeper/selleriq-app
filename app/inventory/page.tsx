@@ -81,8 +81,8 @@ function fmt(n: number) {
 function truncate(s: string, n: number) {
   return s && s.length > n ? s.slice(0, n) + '…' : s
 }
-function getStatus(available: number, doc: number | null): InventoryRow['status'] {
-  if (available === 0) return 'out_of_stock'
+function getStatus(fulfillable: number, doc: number | null): InventoryRow['status'] {
+  if (fulfillable === 0) return 'out_of_stock'
   if (doc !== null && doc < CRITICAL_THRESHOLD) return 'critical'
   if (doc !== null && doc < LOW_STOCK_THRESHOLD) return 'low'
   return 'healthy'
@@ -336,7 +336,7 @@ export default function Inventory() {
           unsellable:    row.unsellable_quantity || 0,
           avg_daily_units: Math.round(avgDailyUnits * 10) / 10,
           days_of_cover: doc,
-          status:        getStatus(available, doc),
+          status:        getStatus(fulfillable, doc),
           snapshot_date: row.snapshot_date,
         }
       })
@@ -646,11 +646,11 @@ export default function Inventory() {
                       <tr>
                         <th style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
                         <th style={{ ...thBase, textAlign: 'center', width: '100px' }}>Status</th>
-                        <th style={{ ...thSortable(sortKey === 'available'), textAlign: 'right' }} onClick={() => handleSort('available')}>
-                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Available <SortIcon col="available" cur={sortKey} dir={sortDir} /></span>
-                        </th>
                         <th style={{ ...thSortable(sortKey === 'fulfillable'), textAlign: 'right' }} onClick={() => handleSort('fulfillable')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Fulfillable <SortIcon col="fulfillable" cur={sortKey} dir={sortDir} /></span>
+                        </th>
+                        <th style={{ ...thSortable(sortKey === 'available'), textAlign: 'right' }} onClick={() => handleSort('available')}>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Available <SortIcon col="available" cur={sortKey} dir={sortDir} /></span>
                         </th>
                         <th style={{ ...thSortable(sortKey === 'reserved'), textAlign: 'right' }} onClick={() => handleSort('reserved')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Reserved <SortIcon col="reserved" cur={sortKey} dir={sortDir} /></span>
@@ -680,8 +680,8 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'center' }}>
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: sc.bg, color: sc.color, whiteSpace: 'nowrap' }}>{sc.label}</span>
                             </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: row.available === 0 ? 'var(--red)' : 'var(--text-primary)' }}>{fmt(row.available)}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.fulfillable)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: row.fulfillable === 0 ? 'var(--red)' : 'var(--text-primary)' }}>{fmt(row.fulfillable)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.available)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.reserved)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
@@ -812,8 +812,8 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'center' }}>
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                             </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: row.available === 0 ? 'var(--red)' : 'var(--text-primary)' }}>{fmt(row.available)}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.fulfillable)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: row.fulfillable === 0 ? 'var(--red)' : 'var(--text-primary)' }}>{fmt(row.fulfillable)}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.available)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{fmt(row.reserved)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
