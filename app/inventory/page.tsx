@@ -259,7 +259,7 @@ function ForecastPanel({
       {/* Chart */}
       {avgDailyUnits > 0 ? (
         <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={points} margin={{ top: 8, right: 56, bottom: 0, left: 0 }}>
+          <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis
               dataKey="label"
@@ -268,34 +268,22 @@ function ForecastPanel({
               axisLine={false}
               interval="preserveStartEnd"
             />
-            {/* Left Y axis - inventory */}
             <YAxis
-              yAxisId="inv"
               tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
               tickLine={false}
               axisLine={false}
               tickFormatter={v => fmt(v)}
               width={50}
-            />
-            {/* Right Y axis - cumulative sales */}
-            <YAxis
-              yAxisId="sales"
-              orientation="right"
-              tick={{ fontSize: 9, fill: 'var(--green)' }}
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={v => fmt(v)}
-              width={50}
+              domain={[0, Math.max(startInventory, avgDailyUnits * cappedHorizon)]}
             />
             <Tooltip content={<ForecastTooltip />} />
 
             {/* Zero line */}
-            <ReferenceLine yAxisId="inv" y={0} stroke="var(--red)" strokeWidth={1} strokeDasharray="4 2" />
+            <ReferenceLine y={0} stroke="var(--red)" strokeWidth={1} strokeDasharray="4 2" />
 
-            {/* Threshold line (reorder point) */}
+            {/* Threshold line */}
             {thresholdUnits != null && thresholdUnits > 0 && (
               <ReferenceLine
-                yAxisId="inv"
                 y={thresholdUnits}
                 stroke={thresholdColor || '#F97316'}
                 strokeWidth={1}
@@ -304,14 +292,28 @@ function ForecastPanel({
               />
             )}
 
-            {/* Danger zone — below threshold to zero */}
+            {/* Danger zone */}
             {thresholdUnits != null && thresholdUnits > 0 && (
-              <ReferenceArea yAxisId="inv" y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
+              <ReferenceArea y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
             )}
+
+            {/* Vertical order-by pin */}
+            {orderByDays != null && orderByDays >= 0 && (() => {
+              const orderByDate = new Date()
+              orderByDate.setDate(orderByDate.getDate() + orderByDays)
+              const orderByChartLabel = orderByDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              return (
+                <ReferenceLine
+                  x={orderByChartLabel}
+                  stroke="#F97316"
+                  strokeWidth={2}
+                  label={{ value: `Order by ${orderByChartLabel}`, position: 'insideTopLeft', fontSize: 9, fill: '#F97316', fontWeight: 600 }}
+                />
+              )
+            })()}
 
             {/* Inventory depletion line */}
             <Line
-              yAxisId="inv"
               type="monotone"
               dataKey="inventory"
               name="Inventory"
@@ -321,9 +323,8 @@ function ForecastPanel({
               activeDot={{ r: 4 }}
             />
 
-            {/* Cumulative sales line */}
+            {/* Cumulative sales line - capped at starting inventory so both lines share the same scale */}
             <Line
-              yAxisId="sales"
               type="monotone"
               dataKey="cumulativeSales"
               name="Cumulative Sales"
