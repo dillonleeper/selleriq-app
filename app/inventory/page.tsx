@@ -243,8 +243,47 @@ function ForecastPanel({
       ? 'var(--red)'
       : '#F97316'
 
+  const summaryText = (() => {
+    if (avgDailyUnits === 0) return 'No sales velocity data - forecast unavailable.'
+    if (stockoutLabel && orderByDays != null && orderByDays <= 0) {
+      return `At ${avgDailyUnits.toFixed(1)} units/day, you'll run out ${stockoutLabel}. Your ${Math.round(horizonDays - (thresholdUnits ? thresholdUnits / avgDailyUnits : 0))}d lead time means you should have ordered already - order now.`
+    }
+    if (stockoutLabel && orderByLabel) {
+      return `At ${avgDailyUnits.toFixed(1)} units/day, you'll run out ${stockoutLabel}. Your lead time means you must place the order by ${orderByLabel} to avoid a stockout.`
+    }
+    if (stockoutLabel) {
+      return `At ${avgDailyUnits.toFixed(1)} units/day, you'll run out ${stockoutLabel}. Order soon to avoid a stockout.`
+    }
+    if (orderByLabel) {
+      return `At ${avgDailyUnits.toFixed(1)} units/day, inventory will last through the forecast window. Place your next order by ${orderByLabel} to stay on track.`
+    }
+    return `At ${avgDailyUnits.toFixed(1)} units/day, inventory is healthy through the forecast window.`
+  })()
+
+  const orderByPinLabel = (() => {
+    if (orderByDays == null || orderByDays < 0) return null
+    const step = 7
+    const closestStep = Math.round(orderByDays / step)
+    const clampedStep = Math.max(0, Math.min(closestStep, points.length - 1))
+    return points[clampedStep]?.label ?? null
+  })()
+
+  const summaryColor = stockoutLabel
+    ? (orderByDays != null && orderByDays <= 0 ? 'var(--red)' : '#F97316')
+    : 'var(--text-muted)'
+
   return (
     <div style={{ padding: '16px 20px 20px', background: 'var(--bg-elevated)', borderTop: '1px solid var(--border)' }}>
+
+      <div style={{
+        fontSize: '13px', lineHeight: '1.5', marginBottom: '16px',
+        padding: '10px 14px', borderRadius: '8px',
+        background: stockoutLabel ? 'rgba(220,38,38,0.06)' : 'var(--bg-hover)',
+        border: `1px solid ${stockoutLabel ? 'rgba(220,38,38,0.15)' : 'var(--border)'}`,
+        color: summaryColor, fontWeight: 500,
+      }}>
+        {summaryText}
+      </div>
 
       {/* Stats row */}
       <div style={{ display: 'flex', gap: '32px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -256,9 +295,9 @@ function ForecastPanel({
         ))}
       </div>
 
-      {/* Chart */}
+      {/* Chart - inventory depletion only, clean single line */}
       {avgDailyUnits > 0 ? (
-        <ResponsiveContainer width="100%" height={200}>
+        <ResponsiveContainer width="100%" height={180}>
           <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis
@@ -274,43 +313,35 @@ function ForecastPanel({
               axisLine={false}
               tickFormatter={v => fmt(v)}
               width={50}
-              domain={[0, Math.max(startInventory, avgDailyUnits * cappedHorizon)]}
+              domain={[0, Math.round(startInventory * 1.1)]}
             />
             <Tooltip content={<ForecastTooltip />} />
 
-            {/* Zero line */}
-            <ReferenceLine y={0} stroke="var(--red)" strokeWidth={1} strokeDasharray="4 2" />
-
-            {/* Threshold line */}
+            {/* Threshold line - reorder trigger */}
             {thresholdUnits != null && thresholdUnits > 0 && (
               <ReferenceLine
                 y={thresholdUnits}
-                stroke={thresholdColor || '#F97316'}
+                stroke="#F97316"
                 strokeWidth={1}
                 strokeDasharray="4 2"
-                label={{ value: thresholdLabel || 'Threshold', position: 'insideTopRight', fontSize: 9, fill: thresholdColor || '#F97316' }}
+                label={{ value: thresholdLabel || 'Reorder', position: 'insideTopRight', fontSize: 9, fill: '#F97316' }}
               />
             )}
 
-            {/* Danger zone */}
+            {/* Danger zone below threshold */}
             {thresholdUnits != null && thresholdUnits > 0 && (
               <ReferenceArea y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
             )}
 
-            {/* Vertical order-by pin */}
-            {orderByDays != null && orderByDays >= 0 && (() => {
-              const orderByDate = new Date()
-              orderByDate.setDate(orderByDate.getDate() + orderByDays)
-              const orderByChartLabel = orderByDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-              return (
-                <ReferenceLine
-                  x={orderByChartLabel}
-                  stroke="#F97316"
-                  strokeWidth={2}
-                  label={{ value: `Order by ${orderByChartLabel}`, position: 'insideTopLeft', fontSize: 9, fill: '#F97316', fontWeight: 600 }}
-                />
-              )
-            })()}
+            {/* Vertical order-by pin - matched to nearest data point */}
+            {orderByPinLabel && (
+              <ReferenceLine
+                x={orderByPinLabel}
+                stroke="#F97316"
+                strokeWidth={2}
+                label={{ value: `Order by ${orderByPinLabel}`, position: 'insideTopLeft', fontSize: 9, fill: '#F97316', fontWeight: 700 }}
+              />
+            )}
 
             {/* Inventory depletion line */}
             <Line
@@ -318,21 +349,9 @@ function ForecastPanel({
               dataKey="inventory"
               name="Inventory"
               stroke={lineColor}
-              strokeWidth={2}
+              strokeWidth={2.5}
               dot={false}
-              activeDot={{ r: 4 }}
-            />
-
-            {/* Cumulative sales line - capped at starting inventory so both lines share the same scale */}
-            <Line
-              type="monotone"
-              dataKey="cumulativeSales"
-              name="Cumulative Sales"
-              stroke="var(--green)"
-              strokeWidth={1.5}
-              strokeDasharray="5 3"
-              dot={false}
-              activeDot={{ r: 3 }}
+              activeDot={{ r: 5 }}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -342,37 +361,8 @@ function ForecastPanel({
         </div>
       )}
 
-      {/* Legend */}
-      <div style={{ display: 'flex', gap: '16px', marginTop: '8px', marginBottom: '4px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
-          <div style={{ width: '16px', height: '2px', background: lineColor, borderRadius: '1px' }} />
-          Inventory remaining
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
-          <div style={{ width: '16px', height: '2px', background: 'var(--green)', borderRadius: '1px', borderTop: '2px dashed var(--green)' }} />
-          Cumulative units sold
-        </div>
-        {thresholdUnits != null && thresholdUnits > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
-            <div style={{ width: '16px', height: '2px', borderTop: '2px dashed #F97316' }} />
-            Reorder trigger
-          </div>
-        )}
-      </div>
-
-      {/* Forecast footnotes */}
-      <div style={{ display: 'flex', gap: '16px', marginTop: '10px', flexWrap: 'wrap' }}>
-        {stockoutLabel && (
-          <div style={{ fontSize: '11px', color: 'var(--red)' }}>
-            ⚠ Projected stockout: <strong>{stockoutLabel}</strong>
-          </div>
-        )}
-        {orderByLabel && (
-          <div style={{ fontSize: '11px', color: '#F97316' }}>
-            📦 Order by: <strong>{orderByLabel}</strong>
-          </div>
-        )}
-        <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginLeft: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
           Forecast horizon: {cappedHorizon} days · Based on {avgDailyUnits.toFixed(1)} units/day avg
         </div>
       </div>
