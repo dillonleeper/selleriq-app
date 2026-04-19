@@ -12,6 +12,7 @@ import {
 const CAD_TO_USD = 0.74
 const LOW_STOCK_THRESHOLD   = 30   // days of cover below this = low stock
 const CRITICAL_THRESHOLD    = 14   // days of cover below this = critical
+const LOOKBACK_DAYS         = 30
 const FBA_TARGET_DEFAULT      = 60
 const SUPPLIER_PROD_DEFAULT   = 42
 const SUPPLIER_SHIP_DEFAULT   = 28
@@ -310,22 +311,20 @@ export default function Inventory() {
         .limit(20000)
 
       // Avg daily units per SKU+marketplace
-      const salesBySku: Record<string, { total: number, days: Set<string> }> = {}
+      const salesBySku: Record<string, { total: number }> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
         const key = `${row.sku}__${row.marketplace}`
-        if (!salesBySku[key]) salesBySku[key] = { total: 0, days: new Set() }
+        if (!salesBySku[key]) salesBySku[key] = { total: 0 }
         salesBySku[key].total += row.units_ordered || 0
-        salesBySku[key].days.add(row.start_date)
       }
 
       // Also build a combined avg for supplier report (combine US+CA into one row per SKU)
-      const salesBySkuOnly: Record<string, { total: number, days: Set<string> }> = {}
+      const salesBySkuOnly: Record<string, { total: number }> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
-        if (!salesBySkuOnly[row.sku]) salesBySkuOnly[row.sku] = { total: 0, days: new Set() }
+        if (!salesBySkuOnly[row.sku]) salesBySkuOnly[row.sku] = { total: 0 }
         salesBySkuOnly[row.sku].total += row.units_ordered || 0
-        salesBySkuOnly[row.sku].days.add(`${row.marketplace}__${row.start_date}`)
       }
 
       // Dim product for titles
@@ -345,8 +344,7 @@ export default function Inventory() {
         const key = `${row.sku}__${row.marketplace}`
         const salesInfo = salesBySku[key]
         const totalUnits = salesInfo?.total || 0
-        const dayCount   = salesInfo?.days.size || 0
-        const avgDailyUnits = dayCount > 0 ? (totalUnits / dayCount) : 0
+        const avgDailyUnits = totalUnits / LOOKBACK_DAYS
         const available  = row.available_quantity || 0
         const fulfillable = row.fulfillable_quantity || 0
         const inbound    = row.total_inbound_quantity || 0
