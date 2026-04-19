@@ -5,18 +5,23 @@ import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
-  ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download, Upload
+  ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download, Upload,
+  ChevronDown, ChevronRight,
 } from 'lucide-react'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, ReferenceArea,
+} from 'recharts'
 
 // ─── Constants ───────────────────────────────────────────────
 const CAD_TO_USD = 0.74
-const LOW_STOCK_THRESHOLD   = 30   // days of cover below this = low stock
-const CRITICAL_THRESHOLD    = 14   // days of cover below this = critical
-const LOOKBACK_DAYS         = 30
+const LOW_STOCK_THRESHOLD   = 30
+const CRITICAL_THRESHOLD    = 14
 const FBA_TARGET_DEFAULT      = 60
 const SUPPLIER_PROD_DEFAULT   = 42
 const SUPPLIER_SHIP_DEFAULT   = 28
 const SUPPLIER_BUFFER_DEFAULT = 60
+const MAX_FORECAST_DAYS       = 365
 
 type TabType = 'inventory' | 'fba' | 'supplier'
 
@@ -30,7 +35,7 @@ type InventoryRow = {
   available: number
   reserved: number
   inbound: number
-  total_fba: number   // fulfillable + inbound + reserved
+  total_fba: number
   unsellable: number
   avg_daily_units: number
   days_of_cover: number | null
@@ -66,6 +71,12 @@ type SupplierReplenRow = {
   units_to_order: number
   reorder_by: string | null
   urgency: 'critical' | 'reorder' | 'healthy'
+}
+
+type ForecastPoint = {
+  label: string
+  inventory: number
+  threshold?: number
 }
 
 type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
@@ -109,6 +120,26 @@ function exportCSV(headers: string[], rows: (string | number)[][], filename: str
   URL.revokeObjectURL(url)
 }
 
+// ─── Forecast generator ───────────────────────────────────────
+// Generates weekly projection points from today out to horizonDays
+function buildForecast(startInventory: number, avgDailyUnits: number, horizonDays: number): ForecastPoint[] {
+  const points: ForecastPoint[] = []
+  const today = new Date()
+  // Sample every 7 days for readability
+  const step = 7
+  const steps = Math.ceil(horizonDays / step)
+
+  for (let i = 0; i <= steps; i++) {
+    const dayOffset = i * step
+    const d = new Date(today)
+    d.setDate(today.getDate() + dayOffset)
+    const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const inventory = Math.max(0, Math.round(startInventory - avgDailyUnits * dayOffset))
+    points.push({ label, inventory })
+  }
+  return points
+}
+
 const STATUS_CONFIG = {
   out_of_stock: { label: 'Out of Stock', color: 'var(--red)',    bg: 'var(--red-light)' },
   critical:     { label: 'Critical',     color: '#F97316',       bg: 'rgba(249,115,22,0.1)' },
@@ -121,7 +152,7 @@ const URGENCY_CONFIG = {
   healthy:  { label: 'Healthy',  color: 'var(--green)',  bg: 'var(--green-light)' },
 }
 
-// ─── Urgency Filter Component ─────────────────────────────────
+// ─── Urgency Filter ───────────────────────────────────────────
 function UrgencyFilter({ counts, current, onChange }: {
   counts: Record<string, number>
   current: string
@@ -155,6 +186,152 @@ function SortIcon({ col, cur, dir }: { col: string, cur: string, dir: SortDir })
   return dir === 'desc' ? <ArrowDown size={10} /> : <ArrowUp size={10} />
 }
 
+// ─── Forecast Tooltip ─────────────────────────────────────────
+const ForecastTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', boxShadow: 'var(--shadow-md)' }}>
+      <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>{label}</div>
+      {payload.map((p: any, i: number) => (
+        <div key={i} style={{ color: p.color, fontWeight: 500 }}>
+          {p.name}: <span style={{ color: 'var(--text-primary)' }}>{fmt(p.value)} units</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Forecast Panel ───────────────────────────────────────────
+function ForecastPanel({
+  startInventory,
+  avgDailyUnits,
+  horizonDays,
+  thresholdUnits,
+  thresholdLabel,
+  thresholdColor,
+  orderByDays,
+  statsLeft,
+  statsRight,
+}: {
+  startInventory: number
+  avgDailyUnits: number
+  horizonDays: number
+  thresholdUnits?: number
+  thresholdLabel?: string
+  thresholdColor?: string
+  orderByDays?: number | null
+  statsLeft: { label: string; value: string; color?: string }[]
+  statsRight: { label: string; value: string; color?: string }[]
+}) {
+  const cappedHorizon = Math.min(horizonDays, MAX_FORECAST_DAYS)
+  const points = buildForecast(startInventory, avgDailyUnits, cappedHorizon)
+
+  // Find stockout day index
+  const stockoutIndex = points.findIndex(p => p.inventory === 0)
+  const stockoutLabel = stockoutIndex > 0 ? points[stockoutIndex].label : null
+
+  // Order by label
+  const orderByLabel = orderByDays != null && orderByDays >= 0
+    ? addDays(orderByDays)
+    : null
+
+  const lineColor = avgDailyUnits === 0
+    ? 'var(--green)'
+    : stockoutIndex > 0 && stockoutIndex < points.length - 1
+      ? 'var(--red)'
+      : '#F97316'
+
+  return (
+    <div style={{ padding: '16px 20px 20px', background: 'var(--bg-elevated)', borderTop: '1px solid var(--border)' }}>
+
+      {/* Stats row */}
+      <div style={{ display: 'flex', gap: '32px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {[...statsLeft, ...statsRight].map((s, i) => (
+          <div key={i}>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>{s.label}</div>
+            <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: s.color || 'var(--text-primary)' }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Chart */}
+      {avgDailyUnits > 0 ? (
+        <ResponsiveContainer width="100%" height={180}>
+          <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
+              tickLine={false}
+              axisLine={false}
+              interval="preserveStartEnd"
+            />
+            <YAxis
+              tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={v => fmt(v)}
+              width={50}
+            />
+            <Tooltip content={<ForecastTooltip />} />
+
+            {/* Zero line */}
+            <ReferenceLine y={0} stroke="var(--red)" strokeWidth={1} strokeDasharray="4 2" />
+
+            {/* Threshold line (reorder point) */}
+            {thresholdUnits != null && thresholdUnits > 0 && (
+              <ReferenceLine
+                y={thresholdUnits}
+                stroke={thresholdColor || '#F97316'}
+                strokeWidth={1}
+                strokeDasharray="4 2"
+                label={{ value: thresholdLabel || 'Threshold', position: 'insideTopRight', fontSize: 9, fill: thresholdColor || '#F97316' }}
+              />
+            )}
+
+            {/* Danger zone — below threshold to zero */}
+            {thresholdUnits != null && thresholdUnits > 0 && (
+              <ReferenceArea y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
+            )}
+
+            {/* Inventory line */}
+            <Line
+              type="monotone"
+              dataKey="inventory"
+              name="Inventory"
+              stroke={lineColor}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      ) : (
+        <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-dim)' }}>
+          No sales velocity data — forecast unavailable
+        </div>
+      )}
+
+      {/* Forecast footnotes */}
+      <div style={{ display: 'flex', gap: '16px', marginTop: '10px', flexWrap: 'wrap' }}>
+        {stockoutLabel && (
+          <div style={{ fontSize: '11px', color: 'var(--red)' }}>
+            ⚠ Projected stockout: <strong>{stockoutLabel}</strong>
+          </div>
+        )}
+        {orderByLabel && (
+          <div style={{ fontSize: '11px', color: '#F97316' }}>
+            📦 Order by: <strong>{orderByLabel}</strong>
+          </div>
+        )}
+        <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginLeft: 'auto' }}>
+          Forecast horizon: {cappedHorizon} days · Based on {avgDailyUnits.toFixed(1)} units/day avg
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ───────────────────────────────────────────
 export default function Inventory() {
   const [markets, setMarkets]         = useState(['US', 'CA'])
@@ -172,24 +349,22 @@ export default function Inventory() {
   const [fbaFilter, setFbaFilter]     = useState<string>('all')
   const [supFilter, setSupFilter]     = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
+  const [expandedFbaSku, setExpandedFbaSku]   = useState<string | null>(null)
+  const [expandedSupSku, setExpandedSupSku]   = useState<string | null>(null)
 
-  // ── User-configurable replenishment settings (persisted) ──
-  const [fbaTarget, setFbaTarget]           = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_fba_target') || FBA_TARGET_DEFAULT) : FBA_TARGET_DEFAULT)
-  const [prodDays, setProdDays]             = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_prod_days') || SUPPLIER_PROD_DEFAULT) : SUPPLIER_PROD_DEFAULT)
-  const [shipDays, setShipDays]             = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_ship_days') || SUPPLIER_SHIP_DEFAULT) : SUPPLIER_SHIP_DEFAULT)
-  const [bufferDays, setBufferDays]         = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_buffer_days') || SUPPLIER_BUFFER_DEFAULT) : SUPPLIER_BUFFER_DEFAULT)
-
-  // Pending input values (before confirmation)
-  const [pendingFba, setPendingFba]         = useState<number>(fbaTarget)
-  const [pendingProd, setPendingProd]       = useState<number>(prodDays)
-  const [pendingShip, setPendingShip]       = useState<number>(shipDays)
-  const [pendingBuffer, setPendingBuffer]   = useState<number>(bufferDays)
-
-  // Confirmation dialog state
+  // ── Replenishment settings ──
+  const [fbaTarget, setFbaTarget]     = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_fba_target') || FBA_TARGET_DEFAULT) : FBA_TARGET_DEFAULT)
+  const [prodDays, setProdDays]       = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_prod_days') || SUPPLIER_PROD_DEFAULT) : SUPPLIER_PROD_DEFAULT)
+  const [shipDays, setShipDays]       = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_ship_days') || SUPPLIER_SHIP_DEFAULT) : SUPPLIER_SHIP_DEFAULT)
+  const [bufferDays, setBufferDays]   = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_buffer_days') || SUPPLIER_BUFFER_DEFAULT) : SUPPLIER_BUFFER_DEFAULT)
+  const [pendingFba, setPendingFba]   = useState<number>(fbaTarget)
+  const [pendingProd, setPendingProd] = useState<number>(prodDays)
+  const [pendingShip, setPendingShip] = useState<number>(shipDays)
+  const [pendingBuffer, setPendingBuffer] = useState<number>(bufferDays)
   const [showFbaConfirm, setShowFbaConfirm] = useState(false)
   const [showSupConfirm, setShowSupConfirm] = useState(false)
 
-  // Warehouse inventory state (persisted via localStorage)
+  // ── Warehouse inventory ──
   const [warehouseQty, setWarehouseQty] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {}
     try { return JSON.parse(localStorage.getItem('selleriq_warehouse_qty') || '{}') } catch { return {} }
@@ -200,11 +375,9 @@ export default function Inventory() {
   const [unmatchedSkus, setUnmatchedSkus] = useState<string[]>([])
   const [showUnmatched, setShowUnmatched] = useState(false)
 
-  // Derived supplier values
   const supplierLeadDays    = prodDays + shipDays
   const supplierOrderTarget = prodDays + shipDays + bufferDays
 
-  // Download template CSV
   const downloadTemplate = () => {
     const allSkus = [...new Set(inventory.map(r => r.sku).filter(Boolean))]
     const rows = allSkus.map(sku => `${sku},0`)
@@ -216,7 +389,6 @@ export default function Inventory() {
     URL.revokeObjectURL(url)
   }
 
-  // Handle warehouse CSV upload
   const handleWarehouseUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -253,14 +425,12 @@ export default function Inventory() {
     e.target.value = ''
   }
 
-  // Apply FBA target
   const applyFbaTarget = () => {
     setFbaTarget(pendingFba)
     localStorage.setItem('selleriq_fba_target', String(pendingFba))
     setShowFbaConfirm(false)
   }
 
-  // Apply supplier settings
   const applySupplierSettings = () => {
     setProdDays(pendingProd)
     setShipDays(pendingShip)
@@ -276,7 +446,6 @@ export default function Inventory() {
     async function load() {
       setLoading(true)
 
-      // Latest snapshot date
       const { data: snapDates } = await supabase
         .from('fct_inventory_snapshot_daily')
         .select('snapshot_date, marketplace')
@@ -288,7 +457,6 @@ export default function Inventory() {
       const latestDate = snapDates[0].snapshot_date
       setSnapshotDate(latestDate)
 
-      // Inventory snapshot
       const { data: invData, error: invError } = await supabase
         .from('fct_inventory_snapshot_daily')
         .select('sku, asin, fnsku, marketplace, snapshot_date, fulfillable_quantity, available_quantity, reserved_quantity, total_inbound_quantity, unsellable_quantity')
@@ -298,7 +466,6 @@ export default function Inventory() {
 
       if (invError) { console.error(invError); setLoading(false); return }
 
-      // 30-day average daily units from fct_sales_daily
       const thirtyDaysAgo = new Date()
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 37)
       const cutoff = thirtyDaysAgo.toISOString().split('T')[0]
@@ -310,7 +477,7 @@ export default function Inventory() {
         .gte('start_date', cutoff)
         .limit(20000)
 
-      // Avg daily units per SKU+marketplace
+      const LOOKBACK_DAYS = 30
       const salesBySku: Record<string, { total: number }> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
@@ -319,7 +486,6 @@ export default function Inventory() {
         salesBySku[key].total += row.units_ordered || 0
       }
 
-      // Also build a combined avg for supplier report (combine US+CA into one row per SKU)
       const salesBySkuOnly: Record<string, { total: number }> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
@@ -327,7 +493,6 @@ export default function Inventory() {
         salesBySkuOnly[row.sku].total += row.units_ordered || 0
       }
 
-      // Dim product for titles
       const skus = [...new Set((invData || []).map(r => r.sku).filter(Boolean))]
       const { data: productData } = await supabase
         .from('dim_product')
@@ -339,7 +504,6 @@ export default function Inventory() {
         if (p.sku) titleBySku[p.sku] = p.title || p.sku
       }
 
-      // Build inventory rows
       const rows: InventoryRow[] = (invData || []).map(row => {
         const key = `${row.sku}__${row.marketplace}`
         const salesInfo = salesBySku[key]
@@ -390,7 +554,7 @@ export default function Inventory() {
     else { setSupSortKey(key); setSupSortDir('asc') }
   }
 
-  // ─── Filtered / sorted inventory ─────────────────────────
+  // ─── Filtered inventory ───────────────────────────────────
   const filtered = inventory
     .filter(r => {
       if (statusFilter !== 'all' && r.status !== statusFilter) return false
@@ -407,7 +571,7 @@ export default function Inventory() {
       return sortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
     })
 
-  // ─── FBA Replenishment rows ───────────────────────────────
+  // ─── FBA rows ─────────────────────────────────────────────
   const fbaRows: FbaReplenRow[] = inventory
     .map(r => {
       const totalInv = r.total_fba
@@ -445,13 +609,12 @@ export default function Inventory() {
       return fbaSortDir === 'asc' ? av - bv : bv - av
     })
 
-  // ─── Supplier Reorder rows ────────────────────────────────
-  // Deduplicate: one row per SKU across all marketplaces
+  // ─── Supplier rows ────────────────────────────────────────
   const supplierRowsBySku: Record<string, SupplierReplenRow> = {}
   for (const r of inventory) {
     if (!r.sku) continue
-    const existing = supplierRowsBySku[r.sku]
     const wh = warehouseQty[r.sku] || 0
+    const existing = supplierRowsBySku[r.sku]
     if (!existing) {
       supplierRowsBySku[r.sku] = {
         sku: r.sku, title: r.title, asin: r.asin,
@@ -507,7 +670,7 @@ export default function Inventory() {
   const supUrgencyCounts = supplierRows.reduce((acc, r) => { acc[r.urgency] = (acc[r.urgency] || 0) + 1; return acc }, {} as Record<string, number>)
   const statusCounts = filtered.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc }, {} as Record<string, number>)
 
-  // ─── Table header styles ──────────────────────────────────
+  // ─── Table styles ─────────────────────────────────────────
   const thBase: React.CSSProperties = {
     padding: '10px 12px', fontSize: '10px', fontWeight: 600,
     textTransform: 'uppercase', letterSpacing: '0.06em',
@@ -562,7 +725,6 @@ export default function Inventory() {
           {/* ── INVENTORY SNAPSHOT TAB ── */}
           {tab === 'inventory' && (
             <>
-              {/* Search + Filter + Export */}
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
                   <Search size={13} color="var(--text-muted)" />
@@ -591,7 +753,6 @@ export default function Inventory() {
                 </button>
               </div>
 
-              {/* Inventory Table */}
               <div className="card" style={{ overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -674,7 +835,6 @@ export default function Inventory() {
                 </div>
               </div>
 
-              {/* FBA Confirm Dialog */}
               {showFbaConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '360px', border: '1px solid var(--border)' }}>
@@ -688,7 +848,6 @@ export default function Inventory() {
                 </div>
               )}
 
-              {/* Search + Filter + Export */}
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
                   <Search size={13} color="var(--text-muted)" />
@@ -705,7 +864,6 @@ export default function Inventory() {
                 </button>
               </div>
 
-              {/* FBA Table */}
               <div className="card" style={{ overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -729,35 +887,74 @@ export default function Inventory() {
                         <th style={{ ...thSortable(fbaSortKey === 'units_to_send'), textAlign: 'right', color: 'var(--accent)' }} onClick={() => handleFbaSort('units_to_send')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Units to Send <SortIcon col="units_to_send" cur={fbaSortKey} dir={fbaSortDir} /></span>
                         </th>
+                        <th style={{ ...thBase, width: '32px' }}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {fbaRows.map(row => {
                         const uc = URGENCY_CONFIG[row.urgency]
+                        const isExpanded = expandedFbaSku === `${row.sku}-${row.marketplace}`
+                        const reorderThreshold = row.avg_daily_units * supplierLeadDays
+                        const daysUntilThreshold = row.days_of_cover !== null && row.days_of_cover > supplierLeadDays
+                          ? row.days_of_cover - supplierLeadDays : null
+
                         return (
-                          <tr key={`${row.sku}-${row.marketplace}`} style={{ borderBottom: '1px solid var(--border)' }}
-                            onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)'}
-                            onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}>
-                            <td style={{ padding: '11px 12px' }}>
-                              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{truncate(row.title, 45)}</div>
-                              <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'center' }}>
-                              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'center', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.marketplace}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
-                              {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
-                                <span style={{ fontWeight: 600, color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' }}>{row.days_of_cover}d</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: row.units_to_send > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>
-                              {row.units_to_send > 0 ? fmt(row.units_to_send) : '—'}
-                            </td>
-                          </tr>
+                          <React.Fragment key={`${row.sku}-${row.marketplace}`}>
+                            <tr
+                              onClick={() => setExpandedFbaSku(isExpanded ? null : `${row.sku}-${row.marketplace}`)}
+                              style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? 'var(--accent-light)' : 'transparent' }}
+                              onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)' }}
+                              onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'transparent' }}
+                            >
+                              <td style={{ padding: '11px 12px' }}>
+                                <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{truncate(row.title, 45)}</div>
+                                <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'center' }}>
+                                <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'center', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.marketplace}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
+                                {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
+                                  <span style={{ fontWeight: 600, color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' }}>{row.days_of_cover}d</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: row.units_to_send > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>
+                                {row.units_to_send > 0 ? fmt(row.units_to_send) : '—'}
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'center', color: 'var(--text-dim)' }}>
+                                {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                <td colSpan={9} style={{ padding: 0, background: 'var(--accent-light)' }}>
+                                  <ForecastPanel
+                                    startInventory={row.total_inventory}
+                                    avgDailyUnits={row.avg_daily_units}
+                                    horizonDays={fbaTarget}
+                                    thresholdUnits={reorderThreshold}
+                                    thresholdLabel={`Reorder point (${supplierLeadDays}d lead)`}
+                                    thresholdColor="#F97316"
+                                    orderByDays={daysUntilThreshold}
+                                    statsLeft={[
+                                      { label: 'Current FBA', value: fmt(row.total_inventory) },
+                                      { label: 'Avg/Day', value: row.avg_daily_units.toFixed(1) },
+                                      { label: 'Days Cover', value: row.days_of_cover !== null ? `${row.days_of_cover}d` : '—', color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' },
+                                    ]}
+                                    statsRight={[
+                                      { label: 'FBA Target', value: `${fbaTarget}d` },
+                                      { label: 'Units to Send', value: row.units_to_send > 0 ? fmt(row.units_to_send) : '✓ Covered', color: row.units_to_send > 0 ? 'var(--accent)' : 'var(--green)' },
+                                      { label: 'Send By', value: daysUntilThreshold !== null ? addDays(daysUntilThreshold) : row.urgency === 'critical' ? 'Now' : 'On Track', color: row.urgency === 'critical' ? 'var(--red)' : '#F97316' },
+                                    ]}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         )
                       })}
                     </tbody>
@@ -814,7 +1011,7 @@ export default function Inventory() {
                 </div>
               </div>
 
-              {/* Unmatched SKUs Dialog */}
+              {/* Dialogs */}
               {showUnmatched && unmatchedSkus.length > 0 && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '400px', border: '1px solid var(--border)' }}>
@@ -822,9 +1019,7 @@ export default function Inventory() {
                       <AlertTriangle size={15} color="#F97316" />
                       <div style={{ fontSize: '15px', fontWeight: 600 }}>{unmatchedSkus.length} Unmatched SKU{unmatchedSkus.length > 1 ? 's' : ''}</div>
                     </div>
-                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                      These SKUs were in your CSV but not found in SellerIQ. Check for typos or missing products.
-                    </div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px' }}>These SKUs were in your CSV but not found in SellerIQ.</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '20px' }}>
                       {unmatchedSkus.map(sku => (
                         <div key={sku} style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', padding: '4px 8px', background: 'var(--bg-hover)', borderRadius: '4px', color: '#F97316' }}>{sku}</div>
@@ -837,7 +1032,6 @@ export default function Inventory() {
                 </div>
               )}
 
-              {/* Supplier Confirm Dialog */}
               {showSupConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '380px', border: '1px solid var(--border)' }}>
@@ -897,44 +1091,83 @@ export default function Inventory() {
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Units to Order <SortIcon col="units_to_order" cur={supSortKey} dir={supSortDir} /></span>
                         </th>
                         <th style={{ ...thBase, textAlign: 'right' }}>Reorder By</th>
+                        <th style={{ ...thBase, width: '32px' }}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {supplierRows.map(row => {
                         const uc = URGENCY_CONFIG[row.urgency]
+                        const isExpanded = expandedSupSku === row.sku
+                        const leadThreshold = row.avg_daily_units * supplierLeadDays
+                        const daysUntilLead = row.days_of_cover_total !== null && row.days_of_cover_total > supplierLeadDays
+                          ? row.days_of_cover_total - supplierLeadDays : null
+
                         return (
-                          <tr key={row.sku} style={{ borderBottom: '1px solid var(--border)' }}
-                            onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)'}
-                            onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}>
-                            <td style={{ padding: '11px 12px' }}>
-                              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{truncate(row.title, 45)}</div>
-                              <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'center' }}>
-                              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.warehouse_qty > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.warehouse_qty > 0 ? fmt(row.warehouse_qty) : '—'}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
-                              {row.days_of_cover_total === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
-                                <span style={{ fontWeight: 600, color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' }}>{row.days_of_cover_total}d</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: row.units_to_order > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>
-                              {row.units_to_order > 0 ? fmt(row.units_to_order) : '—'}
-                            </td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace' }}>
-                              {row.reorder_by === 'Order Now' ? (
-                                <span style={{ fontWeight: 700, color: 'var(--red)' }}>Order Now</span>
-                              ) : row.reorder_by ? (
-                                <span style={{ color: '#F97316' }}>{row.reorder_by}</span>
-                              ) : (
-                                <span style={{ color: 'var(--green)' }}>On Track</span>
-                              )}
-                            </td>
-                          </tr>
+                          <React.Fragment key={row.sku}>
+                            <tr
+                              onClick={() => setExpandedSupSku(isExpanded ? null : row.sku)}
+                              style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? 'var(--accent-light)' : 'transparent' }}
+                              onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)' }}
+                              onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'transparent' }}
+                            >
+                              <td style={{ padding: '11px 12px' }}>
+                                <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{truncate(row.title, 45)}</div>
+                                <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'center' }}>
+                                <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.warehouse_qty > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.warehouse_qty > 0 ? fmt(row.warehouse_qty) : '—'}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
+                                {row.days_of_cover_total === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
+                                  <span style={{ fontWeight: 600, color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' }}>{row.days_of_cover_total}d</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: row.units_to_order > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>
+                                {row.units_to_order > 0 ? fmt(row.units_to_order) : '—'}
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace' }}>
+                                {row.reorder_by === 'Order Now' ? (
+                                  <span style={{ fontWeight: 700, color: 'var(--red)' }}>Order Now</span>
+                                ) : row.reorder_by ? (
+                                  <span style={{ color: '#F97316' }}>{row.reorder_by}</span>
+                                ) : (
+                                  <span style={{ color: 'var(--green)' }}>On Track</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '11px 12px', textAlign: 'center', color: 'var(--text-dim)' }}>
+                                {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                <td colSpan={10} style={{ padding: 0, background: 'var(--accent-light)' }}>
+                                  <ForecastPanel
+                                    startInventory={row.total_inventory}
+                                    avgDailyUnits={row.avg_daily_units}
+                                    horizonDays={supplierOrderTarget}
+                                    thresholdUnits={leadThreshold}
+                                    thresholdLabel={`Order trigger (${supplierLeadDays}d lead time)`}
+                                    thresholdColor="#F97316"
+                                    orderByDays={daysUntilLead}
+                                    statsLeft={[
+                                      { label: 'Total Inventory', value: fmt(row.total_inventory) },
+                                      { label: 'FBA', value: fmt(row.total_fba) },
+                                      { label: 'Warehouse', value: row.warehouse_qty > 0 ? fmt(row.warehouse_qty) : '—', color: '#A78BFA' },
+                                    ]}
+                                    statsRight={[
+                                      { label: 'Avg/Day', value: row.avg_daily_units.toFixed(1) },
+                                      { label: 'Days Cover', value: row.days_of_cover_total !== null ? `${row.days_of_cover_total}d` : '—', color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' },
+                                      { label: 'Units to Order', value: row.units_to_order > 0 ? fmt(row.units_to_order) : '✓ Covered', color: row.units_to_order > 0 ? 'var(--accent)' : 'var(--green)' },
+                                    ]}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         )
                       })}
                     </tbody>
