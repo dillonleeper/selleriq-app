@@ -686,7 +686,7 @@ export default function ProductPerformance() {
                                   ))}
                                 </div>
                                 <ResponsiveContainer width="100%" height={160}>
-                                  <AreaChart data={getBucketedData(p.sku)}>
+                                  <AreaChart data={allPeriodData[p.sku] || []}>
                                     <defs>
                                       <linearGradient id={`grad-${sanitizeId(p.sku)}`} x1="0" y1="0" x2="0" y2="1">
                                         <stop offset="5%"  stopColor="var(--accent)" stopOpacity={0.2} />
