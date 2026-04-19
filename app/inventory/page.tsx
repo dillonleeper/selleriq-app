@@ -76,6 +76,7 @@ type SupplierReplenRow = {
 type ForecastPoint = {
   label: string
   inventory: number
+  cumulativeSales: number
   threshold?: number
 }
 
@@ -122,10 +123,10 @@ function exportCSV(headers: string[], rows: (string | number)[][], filename: str
 
 // ─── Forecast generator ───────────────────────────────────────
 // Generates weekly projection points from today out to horizonDays
+// Each point includes both remaining inventory and cumulative units sold
 function buildForecast(startInventory: number, avgDailyUnits: number, horizonDays: number): ForecastPoint[] {
   const points: ForecastPoint[] = []
   const today = new Date()
-  // Sample every 7 days for readability
   const step = 7
   const steps = Math.ceil(horizonDays / step)
 
@@ -135,7 +136,8 @@ function buildForecast(startInventory: number, avgDailyUnits: number, horizonDay
     d.setDate(today.getDate() + dayOffset)
     const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     const inventory = Math.max(0, Math.round(startInventory - avgDailyUnits * dayOffset))
-    points.push({ label, inventory })
+    const cumulativeSales = Math.round(avgDailyUnits * dayOffset)
+    points.push({ label, inventory, cumulativeSales })
   }
   return points
 }
@@ -256,8 +258,8 @@ function ForecastPanel({
 
       {/* Chart */}
       {avgDailyUnits > 0 ? (
-        <ResponsiveContainer width="100%" height={180}>
-          <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={points} margin={{ top: 8, right: 56, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis
               dataKey="label"
@@ -266,8 +268,20 @@ function ForecastPanel({
               axisLine={false}
               interval="preserveStartEnd"
             />
+            {/* Left Y axis - inventory */}
             <YAxis
+              yAxisId="inv"
               tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={v => fmt(v)}
+              width={50}
+            />
+            {/* Right Y axis - cumulative sales */}
+            <YAxis
+              yAxisId="sales"
+              orientation="right"
+              tick={{ fontSize: 9, fill: 'var(--green)' }}
               tickLine={false}
               axisLine={false}
               tickFormatter={v => fmt(v)}
@@ -276,11 +290,12 @@ function ForecastPanel({
             <Tooltip content={<ForecastTooltip />} />
 
             {/* Zero line */}
-            <ReferenceLine y={0} stroke="var(--red)" strokeWidth={1} strokeDasharray="4 2" />
+            <ReferenceLine yAxisId="inv" y={0} stroke="var(--red)" strokeWidth={1} strokeDasharray="4 2" />
 
             {/* Threshold line (reorder point) */}
             {thresholdUnits != null && thresholdUnits > 0 && (
               <ReferenceLine
+                yAxisId="inv"
                 y={thresholdUnits}
                 stroke={thresholdColor || '#F97316'}
                 strokeWidth={1}
@@ -291,11 +306,12 @@ function ForecastPanel({
 
             {/* Danger zone — below threshold to zero */}
             {thresholdUnits != null && thresholdUnits > 0 && (
-              <ReferenceArea y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
+              <ReferenceArea yAxisId="inv" y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
             )}
 
-            {/* Inventory line */}
+            {/* Inventory depletion line */}
             <Line
+              yAxisId="inv"
               type="monotone"
               dataKey="inventory"
               name="Inventory"
@@ -304,6 +320,19 @@ function ForecastPanel({
               dot={false}
               activeDot={{ r: 4 }}
             />
+
+            {/* Cumulative sales line */}
+            <Line
+              yAxisId="sales"
+              type="monotone"
+              dataKey="cumulativeSales"
+              name="Cumulative Sales"
+              stroke="var(--green)"
+              strokeWidth={1.5}
+              strokeDasharray="5 3"
+              dot={false}
+              activeDot={{ r: 3 }}
+            />
           </LineChart>
         </ResponsiveContainer>
       ) : (
@@ -311,6 +340,24 @@ function ForecastPanel({
           No sales velocity data — forecast unavailable
         </div>
       )}
+
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: '16px', marginTop: '8px', marginBottom: '4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
+          <div style={{ width: '16px', height: '2px', background: lineColor, borderRadius: '1px' }} />
+          Inventory remaining
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
+          <div style={{ width: '16px', height: '2px', background: 'var(--green)', borderRadius: '1px', borderTop: '2px dashed var(--green)' }} />
+          Cumulative units sold
+        </div>
+        {thresholdUnits != null && thresholdUnits > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
+            <div style={{ width: '16px', height: '2px', borderTop: '2px dashed #F97316' }} />
+            Reorder trigger
+          </div>
+        )}
+      </div>
 
       {/* Forecast footnotes */}
       <div style={{ display: 'flex', gap: '16px', marginTop: '10px', flexWrap: 'wrap' }}>
