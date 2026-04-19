@@ -64,7 +64,7 @@ export default function Sidebar() {
             color: 'var(--text-primary)',
             letterSpacing: '-0.4px',
           }}>
-            SellerIQ
+            Merkury
           </span>
         </div>
       </div>
