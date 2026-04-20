@@ -515,15 +515,15 @@ export default function SalesOverview() {
               <AreaChart data={weeklyData}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+                    <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
+                    <stop offset="95%" stopColor="var(--chart-primary)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis dataKey="start_date" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />
                 <Tooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--accent)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
+                <Area type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -540,7 +540,7 @@ export default function SalesOverview() {
                 <XAxis dataKey="start_date" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="total_units" name="Units" fill="var(--green)" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="total_units" name="Units" fill="var(--chart-success)" radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

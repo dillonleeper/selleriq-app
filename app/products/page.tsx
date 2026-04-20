@@ -151,7 +151,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 // ─── Sparkline ────────────────────────────────────────────────
 function Sparkline({ data, positive }: { data: DataPoint[], positive: boolean | null }) {
   if (!data || data.length < 2) return <span style={{ color: 'var(--text-dim)', fontSize: '10px' }}>—</span>
-  const color = positive === null ? 'var(--text-dim)' : positive ? 'var(--green)' : 'var(--red)'
+  const color = positive === null ? 'var(--text-dim)' : positive ? 'var(--chart-success)' : 'var(--red)'
   return (
     <LineChart width={80} height={32} data={data}>
       <Line type="monotone" dataKey="revenue" stroke={color} strokeWidth={1.5} dot={false} />
@@ -689,15 +689,15 @@ export default function ProductPerformance() {
                                   <AreaChart data={allPeriodData[p.sku] || []}>
                                     <defs>
                                       <linearGradient id={`grad-${sanitizeId(p.sku)}`} x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%"  stopColor="var(--accent)" stopOpacity={0.2} />
-                                        <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+                                        <stop offset="5%"  stopColor="var(--chart-primary)" stopOpacity={1} />
+                                        <stop offset="95%" stopColor="var(--chart-primary)" stopOpacity={0} />
                                       </linearGradient>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                                     <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                                     <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={55} />
                                     <Tooltip content={<CustomTooltip />} />
-                                    <Area type="monotone" dataKey="revenue" name="Revenue" stroke="var(--accent)" strokeWidth={1.5} fill={`url(#grad-${sanitizeId(p.sku)})`} dot={false} />
+                                    <Area type="monotone" dataKey="revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill={`url(#grad-${sanitizeId(p.sku)})`} dot={false} />
                                   </AreaChart>
                                 </ResponsiveContainer>
                               </div>

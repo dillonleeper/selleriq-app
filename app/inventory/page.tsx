@@ -323,10 +323,10 @@ function ForecastPanel({
     : null
 
   const lineColor = avgDailyUnits === 0
-    ? 'var(--green)'
+    ? 'var(--chart-success)'
     : stockoutIndex > 0 && stockoutIndex < points.length - 1
       ? 'var(--red)'
-      : '#F97316'
+      : 'var(--chart-warning)'
 
   const summaryText = (() => {
     if (avgDailyUnits === 0) return 'No sales velocity data - forecast unavailable.'
@@ -355,7 +355,7 @@ function ForecastPanel({
   })()
 
   const summaryColor = stockoutLabel
-    ? (orderByDays != null && orderByDays <= 0 ? 'var(--red)' : '#F97316')
+    ? (orderByDays != null && orderByDays <= 0 ? 'var(--red)' : 'var(--chart-warning)')
     : 'var(--text-muted)'
 
   return (
@@ -364,8 +364,8 @@ function ForecastPanel({
       <div style={{
         fontSize: '13px', lineHeight: '1.5', marginBottom: '16px',
         padding: '10px 14px', borderRadius: '8px',
-        background: stockoutLabel ? 'rgba(220,38,38,0.06)' : 'var(--bg-hover)',
-        border: `1px solid ${stockoutLabel ? 'rgba(220,38,38,0.15)' : 'var(--border)'}`,
+        background: stockoutLabel ? 'var(--chart-danger-fill)' : 'var(--bg-hover)',
+        border: `1px solid ${stockoutLabel ? 'var(--red-light)' : 'var(--border)'}`,
         color: summaryColor, fontWeight: 500,
       }}>
         {summaryText}
@@ -414,8 +414,8 @@ function ForecastPanel({
               {points.map(point => (
                 <Cell
                   key={`demand-${point.dateKey}`}
-                  fill={point.demandPhase === 'forecast' ? 'rgba(168,85,247,0.28)' : 'rgba(59,130,246,0.32)'}
-                  stroke={point.demandPhase === 'forecast' ? 'rgba(168,85,247,0.6)' : 'rgba(59,130,246,0.68)'}
+                  fill={point.demandPhase === 'forecast' ? 'var(--chart-secondary-fill)' : 'var(--chart-primary-fill)'}
+                  stroke={point.demandPhase === 'forecast' ? 'var(--chart-secondary)' : 'var(--chart-primary)'}
                 />
               ))}
             </Bar>
@@ -423,10 +423,10 @@ function ForecastPanel({
             {forecastStartPoint && (
               <ReferenceLine
                 x={forecastStartPoint.dateKey}
-                stroke="#A855F7"
+                stroke="var(--chart-secondary)"
                 strokeWidth={1.5}
                 strokeDasharray="5 3"
-                label={{ value: 'Forecast starts', position: 'insideTopRight', fontSize: 9, fill: '#A855F7', fontWeight: 700 }}
+                label={{ value: 'Forecast starts', position: 'insideTopRight', fontSize: 9, fill: 'var(--chart-secondary)', fontWeight: 700 }}
               />
             )}
 
@@ -434,25 +434,25 @@ function ForecastPanel({
             {thresholdUnits != null && thresholdUnits > 0 && (
               <ReferenceLine
                 y={thresholdUnits}
-                stroke={thresholdColor || '#F97316'}
+                stroke={thresholdColor || 'var(--chart-warning)'}
                 strokeWidth={1}
                 strokeDasharray="4 2"
-                label={{ value: thresholdLabel || 'Reorder', position: 'insideTopRight', fontSize: 9, fill: thresholdColor || '#F97316' }}
+                label={{ value: thresholdLabel || 'Reorder', position: 'insideTopRight', fontSize: 9, fill: thresholdColor || 'var(--chart-warning)' }}
               />
             )}
 
             {/* Danger zone below threshold */}
             {thresholdUnits != null && thresholdUnits > 0 && (
-              <ReferenceArea y1={0} y2={thresholdUnits} fill="rgba(220,38,38,0.04)" />
+              <ReferenceArea y1={0} y2={thresholdUnits} fill="var(--chart-danger-fill)" />
             )}
 
             {/* Vertical order-by pin - matched to nearest data point */}
             {orderByPinLabel && (
               <ReferenceLine
                 x={orderByPinLabel.dateKey}
-                stroke="#F97316"
+                stroke="var(--chart-warning)"
                 strokeWidth={2}
-                label={{ value: `Order by ${orderByPinLabel.label}`, position: 'insideTopLeft', fontSize: 9, fill: '#F97316', fontWeight: 700 }}
+                label={{ value: `Order by ${orderByPinLabel.label}`, position: 'insideTopLeft', fontSize: 9, fill: 'var(--chart-warning)', fontWeight: 700 }}
               />
             )}
 
