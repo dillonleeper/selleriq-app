@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight,
 } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from 'recharts'
 
@@ -75,7 +75,11 @@ type SupplierReplenRow = {
 
 type ForecastPoint = {
   label: string
+  tickLabel: string
   inventory: number
+  periodSales: number
+  actualPeriodSales: number
+  forecastPeriodSales: number
   cumulativeSales: number
   threshold?: number
 }
@@ -122,22 +126,33 @@ function exportCSV(headers: string[], rows: (string | number)[][], filename: str
 }
 
 // ─── Forecast generator ───────────────────────────────────────
-// Generates weekly projection points from today out to horizonDays
-// Each point includes both remaining inventory and cumulative units sold
+// Generates daily projection points from today out to horizonDays.
+// Bars can then distinguish sellable demand from continued forecast demand after stockout.
 function buildForecast(startInventory: number, avgDailyUnits: number, horizonDays: number): ForecastPoint[] {
   const points: ForecastPoint[] = []
   const today = new Date()
-  const step = 7
-  const steps = Math.ceil(horizonDays / step)
+  const totalDays = Math.ceil(horizonDays)
 
-  for (let i = 0; i <= steps; i++) {
-    const dayOffset = i * step
+  for (let dayOffset = 0; dayOffset <= totalDays; dayOffset++) {
     const d = new Date(today)
     d.setDate(today.getDate() + dayOffset)
     const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const tickLabel = dayOffset % 7 === 0 ? label : ''
     const inventory = Math.max(0, Math.round(startInventory - avgDailyUnits * dayOffset))
+    const priorInventory = Math.max(0, startInventory - avgDailyUnits * (dayOffset - 1))
+    const periodSales = dayOffset === 0 ? 0 : avgDailyUnits
+    const actualPeriodSales = dayOffset === 0 ? 0 : (priorInventory > 0 ? avgDailyUnits : 0)
+    const forecastPeriodSales = dayOffset === 0 ? 0 : (priorInventory <= 0 ? avgDailyUnits : 0)
     const cumulativeSales = Math.round(avgDailyUnits * dayOffset)
-    points.push({ label, inventory, cumulativeSales })
+    points.push({
+      label,
+      tickLabel,
+      inventory,
+      periodSales,
+      actualPeriodSales,
+      forecastPeriodSales,
+      cumulativeSales,
+    })
   }
   return points
 }
@@ -262,9 +277,7 @@ function ForecastPanel({
 
   const orderByPinLabel = (() => {
     if (orderByDays == null || orderByDays < 0) return null
-    const step = 7
-    const closestStep = Math.round(orderByDays / step)
-    const clampedStep = Math.max(0, Math.min(closestStep, points.length - 1))
+    const clampedStep = Math.max(0, Math.min(Math.round(orderByDays), points.length - 1))
     return points[clampedStep]?.label ?? null
   })()
 
@@ -295,17 +308,18 @@ function ForecastPanel({
         ))}
       </div>
 
-      {/* Chart - inventory depletion only, clean single line */}
+      {/* Chart - inventory line plus daily demand bars */}
       {avgDailyUnits > 0 ? (
-        <ResponsiveContainer width="100%" height={180}>
-          <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+        <ResponsiveContainer width="100%" height={220}>
+          <ComposedChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis
-              dataKey="label"
+              dataKey="tickLabel"
               tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
               tickLine={false}
               axisLine={false}
-              interval="preserveStartEnd"
+              interval={0}
+              minTickGap={18}
             />
             <YAxis
               tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
@@ -316,6 +330,24 @@ function ForecastPanel({
               domain={[0, Math.round(startInventory * 1.1)]}
             />
             <Tooltip content={<ForecastTooltip />} />
+
+            <Bar
+              dataKey="actualPeriodSales"
+              name="Daily Demand"
+              fill="rgba(59,130,246,0.32)"
+              stroke="rgba(59,130,246,0.65)"
+              radius={[2, 2, 0, 0]}
+              barSize={4}
+            />
+
+            <Bar
+              dataKey="forecastPeriodSales"
+              name="Forecast If In Stock"
+              fill="rgba(168,85,247,0.25)"
+              stroke="rgba(168,85,247,0.55)"
+              radius={[2, 2, 0, 0]}
+              barSize={4}
+            />
 
             {/* Threshold line - reorder trigger */}
             {thresholdUnits != null && thresholdUnits > 0 && (
@@ -353,7 +385,7 @@ function ForecastPanel({
               dot={false}
               activeDot={{ r: 5 }}
             />
-          </LineChart>
+          </ComposedChart>
         </ResponsiveContainer>
       ) : (
         <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-dim)' }}>
@@ -361,7 +393,10 @@ function ForecastPanel({
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', gap: '12px' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+          Blue bars show daily demand while inventory lasts. Violet bars show forecast demand that would continue if inventory were available.
+        </div>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
           Forecast horizon: {cappedHorizon} days · Based on {avgDailyUnits.toFixed(1)} units/day avg
         </div>
