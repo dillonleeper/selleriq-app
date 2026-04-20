@@ -73,15 +73,18 @@ type SupplierReplenRow = {
   urgency: 'critical' | 'reorder' | 'healthy'
 }
 
+type SalesHistoryPoint = {
+  dateKey: string
+  units: number
+}
+
 type ForecastPoint = {
+  dateKey: string
   label: string
   tickLabel: string
-  inventory: number
-  periodSales: number
+  inventory: number | null
   actualPeriodSales: number
   forecastPeriodSales: number
-  cumulativeSales: number
-  threshold?: number
 }
 
 type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
@@ -109,6 +112,12 @@ function addDays(days: number): string {
   d.setDate(d.getDate() + days)
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+function dateKeyFromDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 function exportCSV(headers: string[], rows: (string | number)[][], filename: string) {
   const escapeField = (val: string | number) => {
     const str = String(val)
@@ -126,34 +135,89 @@ function exportCSV(headers: string[], rows: (string | number)[][], filename: str
 }
 
 // ─── Forecast generator ───────────────────────────────────────
-// Generates daily projection points from today out to horizonDays.
-// Bars can then distinguish sellable demand from continued forecast demand after stockout.
-function buildForecast(startInventory: number, avgDailyUnits: number, horizonDays: number): ForecastPoint[] {
+// Combines recent actual daily history with a weekday-based forecast that is
+// nudged by the most recent sales trend.
+function buildForecast(
+  startInventory: number,
+  avgDailyUnits: number,
+  horizonDays: number,
+  salesHistory: SalesHistoryPoint[],
+): ForecastPoint[] {
   const points: ForecastPoint[] = []
   const today = new Date()
+  today.setHours(12, 0, 0, 0)
   const totalDays = Math.ceil(horizonDays)
+  const history = [...salesHistory].sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+  const recentWindow = history.slice(-14)
+  const baselineWindow = history.slice(-28, -14)
 
+  const weekdayTotals = Array.from({ length: 7 }, () => 0)
+  const weekdayCounts = Array.from({ length: 7 }, () => 0)
+  let historyTotal = 0
+  for (const point of history) {
+    const date = new Date(`${point.dateKey}T12:00:00`)
+    const weekday = date.getDay()
+    weekdayTotals[weekday] += point.units
+    weekdayCounts[weekday] += 1
+    historyTotal += point.units
+  }
+  const historyAvg = history.length > 0 ? historyTotal / history.length : 0
+  const fallbackAvg = avgDailyUnits > 0 ? avgDailyUnits : historyAvg
+  const recentAvg = recentWindow.length > 0
+    ? recentWindow.reduce((sum, point) => sum + point.units, 0) / recentWindow.length
+    : fallbackAvg
+  const baselineAvg = baselineWindow.length > 0
+    ? baselineWindow.reduce((sum, point) => sum + point.units, 0) / baselineWindow.length
+    : historyAvg || fallbackAvg
+  const rawTrendFactor = baselineAvg > 0 ? recentAvg / baselineAvg : 1
+  const trendFactor = Math.min(1.35, Math.max(0.65, rawTrendFactor))
+  const getForecastUnitsForWeekday = (weekday: number) => {
+    if (weekdayCounts[weekday] > 0) {
+      const weekdayAvg = weekdayTotals[weekday] / weekdayCounts[weekday]
+      return weekdayAvg * trendFactor
+    }
+    return fallbackAvg
+  }
+
+  let pointIndex = 0
+  for (const point of history) {
+    const date = new Date(`${point.dateKey}T12:00:00`)
+    const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    points.push({
+      dateKey: point.dateKey,
+      label,
+      tickLabel: pointIndex % 7 === 0 ? label : '',
+      inventory: null,
+      actualPeriodSales: point.units,
+      forecastPeriodSales: 0,
+    })
+    pointIndex += 1
+  }
+
+  let remainingInventory = startInventory
   for (let dayOffset = 0; dayOffset <= totalDays; dayOffset++) {
     const d = new Date(today)
     d.setDate(today.getDate() + dayOffset)
+    const dateKey = dateKeyFromDate(d)
     const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    const tickLabel = dayOffset % 7 === 0 ? label : ''
-    const inventory = Math.max(0, Math.round(startInventory - avgDailyUnits * dayOffset))
-    const priorInventory = Math.max(0, startInventory - avgDailyUnits * (dayOffset - 1))
-    const periodSales = dayOffset === 0 ? 0 : avgDailyUnits
-    const actualPeriodSales = dayOffset === 0 ? 0 : (priorInventory > 0 ? avgDailyUnits : 0)
-    const forecastPeriodSales = dayOffset === 0 ? 0 : (priorInventory <= 0 ? avgDailyUnits : 0)
-    const cumulativeSales = Math.round(avgDailyUnits * dayOffset)
+    const tickLabel = pointIndex % 7 === 0 ? label : ''
+    const forecastUnits = dayOffset === 0 ? 0 : getForecastUnitsForWeekday(d.getDay())
+    const actualPeriodSales = 0
+    const forecastPeriodSales = forecastUnits
+    if (dayOffset > 0) {
+      remainingInventory = Math.max(0, remainingInventory - forecastUnits)
+    }
     points.push({
+      dateKey,
       label,
       tickLabel,
-      inventory,
-      periodSales,
+      inventory: Math.round(remainingInventory),
       actualPeriodSales,
-      forecastPeriodSales,
-      cumulativeSales,
+      forecastPeriodSales: Math.round(forecastPeriodSales * 10) / 10,
     })
+    pointIndex += 1
   }
+
   return points
 }
 
@@ -206,10 +270,11 @@ function SortIcon({ col, cur, dir }: { col: string, cur: string, dir: SortDir })
 // ─── Forecast Tooltip ─────────────────────────────────────────
 const ForecastTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
+  const pointLabel = payload[0]?.payload?.label || label
   return (
     <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', boxShadow: 'var(--shadow-md)' }}>
-      <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>{label}</div>
-      {payload.map((p: any, i: number) => (
+      <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>{pointLabel}</div>
+      {payload.filter((p: any) => Number(p.value) > 0).map((p: any, i: number) => (
         <div key={i} style={{ color: p.color, fontWeight: 500 }}>
           {p.name}: <span style={{ color: 'var(--text-primary)' }}>{fmt(p.value)} units</span>
         </div>
@@ -227,6 +292,7 @@ function ForecastPanel({
   thresholdLabel,
   thresholdColor,
   orderByDays,
+  salesHistory,
   statsLeft,
   statsRight,
 }: {
@@ -237,11 +303,13 @@ function ForecastPanel({
   thresholdLabel?: string
   thresholdColor?: string
   orderByDays?: number | null
+  salesHistory: SalesHistoryPoint[]
   statsLeft: { label: string; value: string; color?: string }[]
   statsRight: { label: string; value: string; color?: string }[]
 }) {
   const cappedHorizon = Math.min(horizonDays, MAX_FORECAST_DAYS)
-  const points = buildForecast(startInventory, avgDailyUnits, cappedHorizon)
+  const points = buildForecast(startInventory, avgDailyUnits, cappedHorizon, salesHistory)
+  const xTickLabels = Object.fromEntries(points.map(point => [point.dateKey, point.tickLabel]))
 
   // Find stockout day index
   const stockoutIndex = points.findIndex(p => p.inventory === 0)
@@ -277,8 +345,11 @@ function ForecastPanel({
 
   const orderByPinLabel = (() => {
     if (orderByDays == null || orderByDays < 0) return null
-    const clampedStep = Math.max(0, Math.min(Math.round(orderByDays), points.length - 1))
-    return points[clampedStep]?.label ?? null
+    const orderDate = new Date()
+    orderDate.setDate(orderDate.getDate() + Math.round(orderByDays))
+    const orderDateKey = dateKeyFromDate(orderDate)
+    const matchingPoint = points.find(point => point.dateKey === orderDateKey)
+    return matchingPoint ? { dateKey: matchingPoint.dateKey, label: matchingPoint.label } : null
   })()
 
   const summaryColor = stockoutLabel
@@ -314,12 +385,13 @@ function ForecastPanel({
           <ComposedChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis
-              dataKey="tickLabel"
+              dataKey="dateKey"
               tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
               tickLine={false}
               axisLine={false}
               interval={0}
               minTickGap={18}
+              tickFormatter={value => xTickLabels[value] || ''}
             />
             <YAxis
               tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
@@ -333,7 +405,7 @@ function ForecastPanel({
 
             <Bar
               dataKey="actualPeriodSales"
-              name="Daily Demand"
+              name="Recent Daily Units Sold"
               fill="rgba(59,130,246,0.32)"
               stroke="rgba(59,130,246,0.65)"
               radius={[2, 2, 0, 0]}
@@ -342,7 +414,7 @@ function ForecastPanel({
 
             <Bar
               dataKey="forecastPeriodSales"
-              name="Forecast If In Stock"
+              name="Forecast Daily Demand"
               fill="rgba(168,85,247,0.25)"
               stroke="rgba(168,85,247,0.55)"
               radius={[2, 2, 0, 0]}
@@ -353,10 +425,10 @@ function ForecastPanel({
             {thresholdUnits != null && thresholdUnits > 0 && (
               <ReferenceLine
                 y={thresholdUnits}
-                stroke="#F97316"
+                stroke={thresholdColor || '#F97316'}
                 strokeWidth={1}
                 strokeDasharray="4 2"
-                label={{ value: thresholdLabel || 'Reorder', position: 'insideTopRight', fontSize: 9, fill: '#F97316' }}
+                label={{ value: thresholdLabel || 'Reorder', position: 'insideTopRight', fontSize: 9, fill: thresholdColor || '#F97316' }}
               />
             )}
 
@@ -368,10 +440,10 @@ function ForecastPanel({
             {/* Vertical order-by pin - matched to nearest data point */}
             {orderByPinLabel && (
               <ReferenceLine
-                x={orderByPinLabel}
+                x={orderByPinLabel.dateKey}
                 stroke="#F97316"
                 strokeWidth={2}
-                label={{ value: `Order by ${orderByPinLabel}`, position: 'insideTopLeft', fontSize: 9, fill: '#F97316', fontWeight: 700 }}
+                label={{ value: `Order by ${orderByPinLabel.label}`, position: 'insideTopLeft', fontSize: 9, fill: '#F97316', fontWeight: 700 }}
               />
             )}
 
@@ -395,7 +467,7 @@ function ForecastPanel({
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', gap: '12px' }}>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-          Blue bars show daily demand while inventory lasts. Violet bars show forecast demand that would continue if inventory were available.
+          Blue bars show recent actual daily sales. Violet bars show the forward demand forecast based on weekday pattern, adjusted by the last two weeks of trend.
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
           Forecast horizon: {cappedHorizon} days · Based on {avgDailyUnits.toFixed(1)} units/day avg
@@ -422,6 +494,8 @@ export default function Inventory() {
   const [fbaFilter, setFbaFilter]     = useState<string>('all')
   const [supFilter, setSupFilter]     = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
+  const [salesHistoryBySkuMarket, setSalesHistoryBySkuMarket] = useState<Record<string, SalesHistoryPoint[]>>({})
+  const [salesHistoryBySkuOnly, setSalesHistoryBySkuOnly] = useState<Record<string, SalesHistoryPoint[]>>({})
   const [expandedFbaSku, setExpandedFbaSku]   = useState<string | null>(null)
   const [expandedSupSku, setExpandedSupSku]   = useState<string | null>(null)
 
@@ -552,18 +626,34 @@ export default function Inventory() {
 
       const LOOKBACK_DAYS = 30
       const salesBySku: Record<string, { total: number }> = {}
+      const dailySalesBySku: Record<string, Record<string, number>> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
         const key = `${row.sku}__${row.marketplace}`
         if (!salesBySku[key]) salesBySku[key] = { total: 0 }
         salesBySku[key].total += row.units_ordered || 0
+        if (!dailySalesBySku[key]) dailySalesBySku[key] = {}
+        dailySalesBySku[key][row.start_date] = (dailySalesBySku[key][row.start_date] || 0) + (row.units_ordered || 0)
       }
 
       const salesBySkuOnly: Record<string, { total: number }> = {}
+      const dailySalesBySkuOnly: Record<string, Record<string, number>> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
         if (!salesBySkuOnly[row.sku]) salesBySkuOnly[row.sku] = { total: 0 }
         salesBySkuOnly[row.sku].total += row.units_ordered || 0
+        if (!dailySalesBySkuOnly[row.sku]) dailySalesBySkuOnly[row.sku] = {}
+        dailySalesBySkuOnly[row.sku][row.start_date] = (dailySalesBySkuOnly[row.sku][row.start_date] || 0) + (row.units_ordered || 0)
+      }
+
+      const mapHistory = (dailyTotals: Record<string, Record<string, number>>) => {
+        const mapped: Record<string, SalesHistoryPoint[]> = {}
+        for (const [key, byDate] of Object.entries(dailyTotals)) {
+          mapped[key] = Object.entries(byDate)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([dateKey, units]) => ({ dateKey, units }))
+        }
+        return mapped
       }
 
       const skus = [...new Set((invData || []).map(r => r.sku).filter(Boolean))]
@@ -608,6 +698,8 @@ export default function Inventory() {
       })
 
       setInventory(rows)
+      setSalesHistoryBySkuMarket(mapHistory(dailySalesBySku))
+      setSalesHistoryBySkuOnly(mapHistory(dailySalesBySkuOnly))
       setLoading(false)
     }
     load()
@@ -1013,6 +1105,7 @@ export default function Inventory() {
                                     thresholdLabel={`Reorder point (${supplierLeadDays}d lead)`}
                                     thresholdColor="#F97316"
                                     orderByDays={daysUntilThreshold}
+                                    salesHistory={salesHistoryBySkuMarket[`${row.sku}__${row.marketplace}`] || []}
                                     statsLeft={[
                                       { label: 'Current FBA', value: fmt(row.total_inventory) },
                                       { label: 'Avg/Day', value: row.avg_daily_units.toFixed(1) },
@@ -1226,6 +1319,7 @@ export default function Inventory() {
                                     thresholdLabel={`Order trigger (${supplierLeadDays}d lead time)`}
                                     thresholdColor="#F97316"
                                     orderByDays={daysUntilLead}
+                                    salesHistory={salesHistoryBySkuOnly[row.sku] || []}
                                     statsLeft={[
                                       { label: 'Total Inventory', value: fmt(row.total_inventory) },
                                       { label: 'FBA', value: fmt(row.total_fba) },
