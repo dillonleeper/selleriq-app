@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, ReferenceArea,
+  ResponsiveContainer, ReferenceLine, ReferenceArea, Cell,
 } from 'recharts'
 
 // ─── Constants ───────────────────────────────────────────────
@@ -22,6 +22,7 @@ const SUPPLIER_PROD_DEFAULT   = 42
 const SUPPLIER_SHIP_DEFAULT   = 28
 const SUPPLIER_BUFFER_DEFAULT = 60
 const MAX_FORECAST_DAYS       = 365
+const FORECAST_HISTORY_DAYS   = 14
 
 type TabType = 'inventory' | 'fba' | 'supplier'
 
@@ -83,8 +84,8 @@ type ForecastPoint = {
   label: string
   tickLabel: string
   inventory: number | null
-  actualPeriodSales: number
-  forecastPeriodSales: number
+  demand: number
+  demandPhase: 'actual' | 'forecast'
 }
 
 type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
@@ -148,6 +149,7 @@ function buildForecast(
   today.setHours(12, 0, 0, 0)
   const totalDays = Math.ceil(horizonDays)
   const history = [...salesHistory].sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+  const recentHistory = history.slice(-FORECAST_HISTORY_DAYS)
   const recentWindow = history.slice(-14)
   const baselineWindow = history.slice(-28, -14)
 
@@ -180,7 +182,7 @@ function buildForecast(
   }
 
   let pointIndex = 0
-  for (const point of history) {
+  for (const point of recentHistory) {
     const date = new Date(`${point.dateKey}T12:00:00`)
     const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     points.push({
@@ -188,8 +190,8 @@ function buildForecast(
       label,
       tickLabel: pointIndex % 7 === 0 ? label : '',
       inventory: null,
-      actualPeriodSales: point.units,
-      forecastPeriodSales: 0,
+      demand: Math.round(point.units * 10) / 10,
+      demandPhase: 'actual',
     })
     pointIndex += 1
   }
@@ -202,8 +204,6 @@ function buildForecast(
     const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     const tickLabel = pointIndex % 7 === 0 ? label : ''
     const forecastUnits = dayOffset === 0 ? 0 : getForecastUnitsForWeekday(d.getDay())
-    const actualPeriodSales = 0
-    const forecastPeriodSales = forecastUnits
     if (dayOffset > 0) {
       remainingInventory = Math.max(0, remainingInventory - forecastUnits)
     }
@@ -212,8 +212,8 @@ function buildForecast(
       label,
       tickLabel,
       inventory: Math.round(remainingInventory),
-      actualPeriodSales,
-      forecastPeriodSales: Math.round(forecastPeriodSales * 10) / 10,
+      demand: Math.round(forecastUnits * 10) / 10,
+      demandPhase: 'forecast',
     })
     pointIndex += 1
   }
@@ -271,12 +271,13 @@ function SortIcon({ col, cur, dir }: { col: string, cur: string, dir: SortDir })
 const ForecastTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
   const pointLabel = payload[0]?.payload?.label || label
+  const pointPhase = payload[0]?.payload?.demandPhase
   return (
     <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', boxShadow: 'var(--shadow-md)' }}>
       <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>{pointLabel}</div>
       {payload.filter((p: any) => Number(p.value) > 0).map((p: any, i: number) => (
         <div key={i} style={{ color: p.color, fontWeight: 500 }}>
-          {p.name}: <span style={{ color: 'var(--text-primary)' }}>{fmt(p.value)} units</span>
+          {pointPhase === 'forecast' ? 'Forecast demand' : 'Actual demand'}: <span style={{ color: 'var(--text-primary)' }}>{fmt(p.value)} units</span>
         </div>
       ))}
     </div>
@@ -310,6 +311,7 @@ function ForecastPanel({
   const cappedHorizon = Math.min(horizonDays, MAX_FORECAST_DAYS)
   const points = buildForecast(startInventory, avgDailyUnits, cappedHorizon, salesHistory)
   const xTickLabels = Object.fromEntries(points.map(point => [point.dateKey, point.tickLabel]))
+  const forecastStartPoint = points.find(point => point.demandPhase === 'forecast' && point.demand > 0) || null
 
   // Find stockout day index
   const stockoutIndex = points.findIndex(p => p.inventory === 0)
@@ -404,22 +406,29 @@ function ForecastPanel({
             <Tooltip content={<ForecastTooltip />} />
 
             <Bar
-              dataKey="actualPeriodSales"
-              name="Recent Daily Units Sold"
-              fill="rgba(59,130,246,0.32)"
-              stroke="rgba(59,130,246,0.65)"
+              dataKey="demand"
+              name="Demand"
               radius={[2, 2, 0, 0]}
               barSize={4}
-            />
+            >
+              {points.map(point => (
+                <Cell
+                  key={`demand-${point.dateKey}`}
+                  fill={point.demandPhase === 'forecast' ? 'rgba(168,85,247,0.28)' : 'rgba(59,130,246,0.32)'}
+                  stroke={point.demandPhase === 'forecast' ? 'rgba(168,85,247,0.6)' : 'rgba(59,130,246,0.68)'}
+                />
+              ))}
+            </Bar>
 
-            <Bar
-              dataKey="forecastPeriodSales"
-              name="Forecast Daily Demand"
-              fill="rgba(168,85,247,0.25)"
-              stroke="rgba(168,85,247,0.55)"
-              radius={[2, 2, 0, 0]}
-              barSize={4}
-            />
+            {forecastStartPoint && (
+              <ReferenceLine
+                x={forecastStartPoint.dateKey}
+                stroke="#A855F7"
+                strokeWidth={1.5}
+                strokeDasharray="5 3"
+                label={{ value: 'Forecast starts', position: 'insideTopRight', fontSize: 9, fill: '#A855F7', fontWeight: 700 }}
+              />
+            )}
 
             {/* Threshold line - reorder trigger */}
             {thresholdUnits != null && thresholdUnits > 0 && (
@@ -467,7 +476,7 @@ function ForecastPanel({
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', gap: '12px' }}>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-          Blue bars show recent actual daily sales. Violet bars show the forward demand forecast based on weekday pattern, adjusted by the last two weeks of trend.
+          Blue bars show the last 14 days of actual sales. Violet bars begin immediately after that and show the forecast demand.
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
           Forecast horizon: {cappedHorizon} days · Based on {avgDailyUnits.toFixed(1)} units/day avg
