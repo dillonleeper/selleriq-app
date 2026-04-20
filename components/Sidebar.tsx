@@ -41,6 +41,7 @@ function OrbitLogo() {
 export default function Sidebar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
+  const isDark = theme === 'dark'
 
   return (
     <aside style={{
@@ -50,12 +51,14 @@ export default function Sidebar() {
       borderRight: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column',
       zIndex: 100,
+      boxShadow: isDark ? 'inset -1px 0 0 #2A2A2C' : 'none',
       transition: 'background 0.2s ease, border-color 0.2s ease',
     }}>
       {/* Logo */}
       <div style={{
         padding: '20px 18px',
         borderBottom: '1px solid var(--border)',
+        background: isDark ? 'linear-gradient(180deg, #2D2D30 0%, #252526 100%)' : 'transparent',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
           <OrbitLogo />
@@ -72,10 +75,10 @@ export default function Sidebar() {
       {/* Nav */}
       <nav style={{ padding: '10px 8px', flex: 1 }}>
         <div style={{
-          fontSize: '10px', fontWeight: 600,
+          fontSize: '9px', fontWeight: 600,
           color: 'var(--text-dim)',
-          letterSpacing: '0.08em', textTransform: 'uppercase',
-          padding: '0 10px', marginBottom: '6px',
+          letterSpacing: '0.12em', textTransform: 'uppercase',
+          padding: '0 10px', marginBottom: '8px',
         }}>
           Analytics
         </div>
@@ -85,17 +88,18 @@ export default function Sidebar() {
             <Link key={href} href={href} style={{ textDecoration: 'none' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '9px',
-                padding: '8px 10px', borderRadius: '7px', marginBottom: '1px',
-                background: active ? 'var(--accent-light)' : 'transparent',
+                padding: '8px 10px', borderRadius: isDark ? '3px' : '7px', marginBottom: '1px',
+                background: active ? (isDark ? 'rgba(14,99,156,0.18)' : 'var(--accent-light)') : 'transparent',
                 color: active ? 'var(--accent)' : 'var(--text-muted)',
                 fontSize: '13px', fontWeight: active ? 500 : 400,
                 cursor: 'pointer', transition: 'all 0.12s ease',
-                border: active ? '1px solid var(--accent-border)' : '1px solid transparent',
+                border: active ? `1px solid ${isDark ? '#094771' : 'var(--accent-border)'}` : '1px solid transparent',
+                boxShadow: active && isDark ? 'inset 2px 0 0 #007ACC' : 'none',
               }}
               onMouseEnter={e => {
                 if (!active) {
                   const el = e.currentTarget as HTMLDivElement
-                  el.style.background = 'var(--bg-hover)'
+                  el.style.background = isDark ? '#2A2D2E' : 'var(--bg-hover)'
                   el.style.color = 'var(--text-primary)'
                 }
               }}
@@ -120,6 +124,7 @@ export default function Sidebar() {
         padding: '14px 16px',
         borderTop: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: isDark ? '#252526' : 'transparent',
       }}>
         <div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
@@ -133,8 +138,8 @@ export default function Sidebar() {
           onClick={toggle}
           title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           style={{
-            background: 'var(--bg-hover)', border: '1px solid var(--border)',
-            borderRadius: '6px', padding: '6px', cursor: 'pointer',
+            background: isDark ? '#2D2D30' : 'var(--bg-hover)', border: '1px solid var(--border)',
+            borderRadius: isDark ? '3px' : '6px', padding: '6px', cursor: 'pointer',
             color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
             transition: 'all 0.15s ease',
           }}
