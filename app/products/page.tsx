@@ -85,27 +85,16 @@ function getPresetCutoff(range: typeof PRESET_RANGES[0]): string | null {
   return toISODate(d)
 }
 
-// ISO week number helper → "2025-W03"
+// Sunday-start week key helper → "YYYY-MM-DD" (week start date)
 function toWeekKey(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00')
-  const jan4 = new Date(d.getFullYear(), 0, 4)
-  const startOfWeek1 = new Date(jan4)
-  startOfWeek1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7))
-  const diff = d.getTime() - startOfWeek1.getTime()
-  const week = Math.floor(diff / (7 * 24 * 60 * 60 * 1000)) + 1
-  const year = week <= 0 ? d.getFullYear() - 1 : d.getFullYear()
-  const paddedWeek = String(week <= 0 ? 52 : week).padStart(2, '0')
-  return `${year}-W${paddedWeek}`
+  d.setDate(d.getDate() - d.getDay())
+  return toISODate(d)
 }
 
-// Week key → display label e.g. "Jan 6"
+// Week key (YYYY-MM-DD) → display label e.g. "Apr 12"
 function weekKeyToLabel(weekKey: string): string {
-  const [year, w] = weekKey.split('-W')
-  const jan4 = new Date(Number(year), 0, 4)
-  const startOfWeek1 = new Date(jan4)
-  startOfWeek1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7))
-  const weekStart = new Date(startOfWeek1)
-  weekStart.setDate(startOfWeek1.getDate() + (Number(w) - 1) * 7)
+  const weekStart = new Date(weekKey + 'T12:00:00')
   return weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
