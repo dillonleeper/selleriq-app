@@ -74,6 +74,12 @@ function sanitizeId(s: string) {
 function toISODate(d: Date) {
   return d.toISOString().split('T')[0]
 }
+function startOfSundayWeek(date: Date) {
+  const d = new Date(date)
+  d.setHours(12, 0, 0, 0)
+  d.setDate(d.getDate() - d.getDay())
+  return d
+}
 
 // Get cutoff date for preset ranges
 function getPresetCutoff(range: typeof PRESET_RANGES[0]): string | null {
@@ -352,11 +358,18 @@ export default function ProductPerformance() {
   const paginated = filtered.slice(0, (page + 1) * PAGE_SIZE)
   const hasMore   = filtered.length > paginated.length
 
+  const currentWeekStart = startOfSundayWeek(new Date())
+  const currentWeekStartIso = toISODate(currentWeekStart)
+
   // ─── Cadence table ────────────────────────────────────────────
-  // All unique period keys across all SKUs — sorted
+  // All unique period keys across all SKUs — sorted.
+  // For weekly cadence, hide the in-progress current week so the last column
+  // is always the most recent completed week.
   const allPeriods = Array.from(
     new Set(Object.keys(allPeriodData).flatMap(sku => getBucketedData(sku).map(d => d.period_key)))
-  ).sort()
+  )
+    .filter(period => cadenceGrouping !== 'week' || period < currentWeekStartIso)
+    .sort()
 
   const cadenceRows = filtered
     .map(p => {
