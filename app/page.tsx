@@ -172,7 +172,7 @@ export default function SalesOverview() {
         .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, page_views, sku, title')
         .in('marketplace', markets)
         .order('start_date', { ascending: true })
-        .limit(20000)
+        .limit(100000)
 
       if (cutoff) query = query.gte('start_date', cutoff)
       if (selectedProducts.length > 0) query = query.in('sku', selectedProducts.map(p => p.sku))
@@ -193,7 +193,7 @@ export default function SalesOverview() {
           .in('marketplace', markets)
           .gte('start_date', prevStart.toISOString().split('T')[0])
           .lte('start_date', prevEnd.toISOString().split('T')[0])
-          .limit(20000)
+          .limit(100000)
         if (selectedProducts.length > 0) prevQuery = prevQuery.in('sku', selectedProducts.map(p => p.sku))
         const { data: pd } = await prevQuery
         prevRows = pd || []
