@@ -88,7 +88,7 @@ type ForecastPoint = {
   demandPhase: 'actual' | 'forecast'
 }
 
-type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
+type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'total_fba' | 'days_of_cover' | 'avg_daily_units'
 type FbaSortKey = 'sku' | 'total_inventory' | 'inbound' | 'avg_daily_units' | 'days_of_cover' | 'units_to_send'
 type SupplierSortKey = 'sku' | 'total_fba' | 'avg_daily_units' | 'days_of_cover_total' | 'units_to_order'
 type SortDir = 'asc' | 'desc'
@@ -944,6 +944,9 @@ export default function Inventory() {
                         <th style={{ ...thSortable(sortKey === 'reserved'), textAlign: 'right' }} onClick={() => handleSort('reserved')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Reserved <SortIcon col="reserved" cur={sortKey} dir={sortDir} /></span>
                         </th>
+                        <th style={{ ...thSortable(sortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleSort('total_fba')}>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total FBA <SortIcon col="total_fba" cur={sortKey} dir={sortDir} /></span>
+                        </th>
                         <th style={{ ...thSortable(sortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={sortKey} dir={sortDir} /></span>
                         </th>
@@ -970,6 +973,7 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.fulfillable)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.reserved > 0 ? fmt(row.reserved) : '—'}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(row.total_fba)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
