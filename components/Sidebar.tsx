@@ -1,10 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useTheme } from '@/context/ThemeContext'
 import {
-  BarChart2, Package, Boxes, GitCompare, TrendingUp, Sun, Moon
+  BarChart2, Package, Boxes, GitCompare, TrendingUp, Sun, Moon, LogOut
 } from 'lucide-react'
 
 const nav = [
@@ -40,9 +40,21 @@ function OrbitLogo() {
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const { theme, toggle } = useTheme()
   const isDark = theme === 'dark'
   const isLight = theme === 'light'
+
+  async function handleLogout() {
+    try {
+      await fetch('/api/logout', { method: 'POST' })
+    } catch {
+      // Even if the request fails, push to /login — the proxy will
+      // catch the missing cookie next time anyway.
+    }
+    // Hard nav so the proxy re-checks the (now missing) cookie.
+    window.location.href = '/login'
+  }
 
   return (
     <aside style={{
@@ -121,7 +133,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Footer — theme toggle + account */}
+      {/* Footer — theme toggle + logout + account */}
       <div style={{
         padding: '14px 16px',
         borderTop: '1px solid var(--border)',
@@ -137,28 +149,54 @@ export default function Sidebar() {
             US · CA
           </div>
         </div>
-        <button
-          onClick={toggle}
-          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-          style={{
-            background: isDark ? '#2D2D30' : isLight ? '#F3F3F3' : 'var(--bg-hover)', border: '1px solid var(--border)',
-            borderRadius: isDark ? '3px' : isLight ? '2px' : '6px', padding: '6px', cursor: 'pointer',
-            color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
-            transition: 'all 0.15s ease',
-          }}
-          onMouseEnter={e => {
-            const el = e.currentTarget as HTMLButtonElement
-            el.style.color = 'var(--text-primary)'
-            el.style.borderColor = 'var(--accent)'
-          }}
-          onMouseLeave={e => {
-            const el = e.currentTarget as HTMLButtonElement
-            el.style.color = 'var(--text-muted)'
-            el.style.borderColor = 'var(--border)'
-          }}
-        >
-          {theme === 'light' ? <Moon size={13} /> : <Sun size={13} />}
-        </button>
+
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button
+            onClick={toggle}
+            title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            style={{
+              background: isDark ? '#2D2D30' : isLight ? '#F3F3F3' : 'var(--bg-hover)', border: '1px solid var(--border)',
+              borderRadius: isDark ? '3px' : isLight ? '2px' : '6px', padding: '6px', cursor: 'pointer',
+              color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={e => {
+              const el = e.currentTarget as HTMLButtonElement
+              el.style.color = 'var(--text-primary)'
+              el.style.borderColor = 'var(--accent)'
+            }}
+            onMouseLeave={e => {
+              const el = e.currentTarget as HTMLButtonElement
+              el.style.color = 'var(--text-muted)'
+              el.style.borderColor = 'var(--border)'
+            }}
+          >
+            {theme === 'light' ? <Moon size={13} /> : <Sun size={13} />}
+          </button>
+
+          <button
+            onClick={handleLogout}
+            title="Sign out"
+            style={{
+              background: isDark ? '#2D2D30' : isLight ? '#F3F3F3' : 'var(--bg-hover)', border: '1px solid var(--border)',
+              borderRadius: isDark ? '3px' : isLight ? '2px' : '6px', padding: '6px', cursor: 'pointer',
+              color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={e => {
+              const el = e.currentTarget as HTMLButtonElement
+              el.style.color = 'var(--red)'
+              el.style.borderColor = 'var(--red)'
+            }}
+            onMouseLeave={e => {
+              const el = e.currentTarget as HTMLButtonElement
+              el.style.color = 'var(--text-muted)'
+              el.style.borderColor = 'var(--border)'
+            }}
+          >
+            <LogOut size={13} />
+          </button>
+        </div>
       </div>
     </aside>
   )
