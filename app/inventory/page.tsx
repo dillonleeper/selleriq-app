@@ -515,7 +515,6 @@ export default function Inventory() {
   const [fbaSortDir, setFbaSortDir]   = useState<SortDir>('desc')
   const [supSortKey, setSupSortKey]   = useState<SupplierSortKey>('units_to_order')
   const [supSortDir, setSupSortDir]   = useState<SortDir>('desc')
-  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [fbaFilter, setFbaFilter]     = useState<string>('all')
   const [supFilter, setSupFilter]     = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
@@ -770,7 +769,6 @@ export default function Inventory() {
   // ─── Filtered inventory ───────────────────────────────────
   const filtered = inventory
     .filter(r => {
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false
       if (search) {
         const q = search.toLowerCase()
         return r.sku.toLowerCase().includes(q) || r.title.toLowerCase().includes(q) || r.asin.toLowerCase().includes(q)
@@ -881,7 +879,6 @@ export default function Inventory() {
   // ─── Urgency counts ───────────────────────────────────────
   const fbaUrgencyCounts = fbaRows.reduce((acc, r) => { acc[r.urgency] = (acc[r.urgency] || 0) + 1; return acc }, {} as Record<string, number>)
   const supUrgencyCounts = supplierRows.reduce((acc, r) => { acc[r.urgency] = (acc[r.urgency] || 0) + 1; return acc }, {} as Record<string, number>)
-  const statusCounts = filtered.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc }, {} as Record<string, number>)
 
   // ─── Table styles ─────────────────────────────────────────
   const thBase: React.CSSProperties = {
@@ -966,19 +963,6 @@ export default function Inventory() {
                   <input type="text" placeholder="Filter by SKU, ASIN, or product name..." value={search} onChange={e => setSearch(e.target.value)}
                     style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }} />
                 </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  {(['all', 'out_of_stock', 'critical', 'low', 'healthy'] as const).map(s => (
-                    <button key={s} onClick={() => setStatusFilter(s)} style={{
-                      padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500, cursor: 'pointer',
-                      border: statusFilter === s ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                      background: statusFilter === s ? 'var(--accent-light)' : 'transparent',
-                      color: statusFilter === s ? 'var(--accent)' : 'var(--text-muted)',
-                    }}>
-                      {s === 'all' ? 'All' : STATUS_CONFIG[s].label}
-                      {s !== 'all' && statusCounts[s] ? ` (${statusCounts[s]})` : ''}
-                    </button>
-                  ))}
-                </div>
                 <button onClick={() => exportCSV(
                   ['SKU', 'ASIN', 'Marketplace', 'Status', 'Fulfillable', 'Available', 'Reserved', 'Inbound', 'Total FBA', 'Unsellable', 'Avg Daily Units', 'Days Cover', 'Snapshot Date'],
                   filtered.map(r => [r.sku, r.asin, r.marketplace, r.status, r.fulfillable, r.available, r.reserved, r.inbound, r.total_fba, r.unsellable, r.avg_daily_units, r.days_of_cover ?? '', r.snapshot_date]),
@@ -993,25 +977,25 @@ export default function Inventory() {
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
-                        <th style={{ ...thBase, textAlign: 'center' }}>Status</th>
-                        <th style={{ ...thBase, textAlign: 'center' }}>Mkt</th>
-                        <th style={{ ...thSortable(sortKey === 'fulfillable'), textAlign: 'right' }} onClick={() => handleSort('fulfillable')}>
+                        <th title="Product title and SKU. The SKU is the seller's internal identifier; the ASIN is Amazon's identifier." style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
+                        <th title="Stock health based on days of cover. Out of Stock: 0 fulfillable units. Critical: less than 14 days of cover. Low Stock: 14 to 29 days. Healthy: 30+ days." style={{ ...thBase, textAlign: 'center' }}>Status</th>
+                        <th title="Amazon marketplace (US or CA)." style={{ ...thBase, textAlign: 'center' }}>Mkt</th>
+                        <th title="Total FBA inventory matching Seller Central's Total view. Formula: Fulfillable + Inbound + Reserved (customer orders + FC transfers + FC processing) + Unsellable + Researching." style={{ ...thSortable(sortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleSort('total_fba')}>
+                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total FBA <SortIcon col="total_fba" cur={sortKey} dir={sortDir} /></span>
+                        </th>
+                        <th title="Units currently sellable in FBA warehouses. Excludes inbound, reserved, unsellable, and researching inventory." style={{ ...thSortable(sortKey === 'fulfillable'), textAlign: 'right' }} onClick={() => handleSort('fulfillable')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Fulfillable <SortIcon col="fulfillable" cur={sortKey} dir={sortDir} /></span>
                         </th>
-                        <th style={{ ...thSortable(sortKey === 'inbound'), textAlign: 'right' }} onClick={() => handleSort('inbound')}>
+                        <th title="Units in transit to Amazon FBA. Includes working, shipped, and receiving inbound shipments." style={{ ...thSortable(sortKey === 'inbound'), textAlign: 'right' }} onClick={() => handleSort('inbound')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Inbound <SortIcon col="inbound" cur={sortKey} dir={sortDir} /></span>
                         </th>
-                        <th style={{ ...thSortable(sortKey === 'reserved'), textAlign: 'right' }} onClick={() => handleSort('reserved')}>
+                        <th title="Units held by Amazon and unavailable to sell. Sourced from the Reserved Inventory report: customer orders + FC transfers + FC processing." style={{ ...thSortable(sortKey === 'reserved'), textAlign: 'right' }} onClick={() => handleSort('reserved')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Reserved <SortIcon col="reserved" cur={sortKey} dir={sortDir} /></span>
                         </th>
-			<th style={{ ...thSortable(sortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleSort('total_fba')}>
-			  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total FBA <SortIcon col="total_fba" cur={sortKey} dir={sortDir} /></span>
-			</th>
-                        <th style={{ ...thSortable(sortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSort('avg_daily_units')}>
+                        <th title="Average daily units sold over the last 30 days, calculated from the Sales & Traffic report (units_ordered ÷ 30)." style={{ ...thSortable(sortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={sortKey} dir={sortDir} /></span>
                         </th>
-                        <th style={{ ...thSortable(sortKey === 'days_of_cover'), textAlign: 'right' }} onClick={() => handleSort('days_of_cover')}>
+                        <th title="How many days of stock remain at the current sales pace. Formula: Total FBA ÷ Avg/Day, rounded to whole days." style={{ ...thSortable(sortKey === 'days_of_cover'), textAlign: 'right' }} onClick={() => handleSort('days_of_cover')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Days Cover <SortIcon col="days_of_cover" cur={sortKey} dir={sortDir} /></span>
                         </th>
                       </tr>
@@ -1031,10 +1015,10 @@ export default function Inventory() {
                               <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: sc.bg, color: sc.color }}>{sc.label}</span>
                             </td>
                             <td style={{ padding: '11px 12px', textAlign: 'center', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.marketplace}</td>
+                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_fba)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.fulfillable)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.reserved > 0 ? fmt(row.reserved) : '—'}</td>
-			<td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_fba)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
