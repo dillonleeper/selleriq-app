@@ -88,7 +88,7 @@ type ForecastPoint = {
   demandPhase: 'actual' | 'forecast'
 }
 
-type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'total_fba' | 'days_of_cover' | 'avg_daily_units'
+type SortKey = 'sku' | 'fulfillable' | 'available' | 'reserved' | 'inbound' | 'days_of_cover' | 'avg_daily_units'
 type FbaSortKey = 'sku' | 'total_inventory' | 'inbound' | 'avg_daily_units' | 'days_of_cover' | 'units_to_send'
 type SupplierSortKey = 'sku' | 'total_fba' | 'avg_daily_units' | 'days_of_cover_total' | 'units_to_order'
 type SortDir = 'asc' | 'desc'
@@ -112,6 +112,22 @@ function addDays(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() + days)
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+function relativeTime(dateStr: string): string {
+  if (!dateStr) return ''
+  // Parse as local date (YYYY-MM-DD), comparing to today at midnight local time
+  const snap = new Date(`${dateStr}T00:00:00`)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const diffMs = today.getTime() - snap.getTime()
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  if (diffDays === 0) return 'today'
+  if (diffDays === 1) return 'yesterday'
+  if (diffDays < 7) return `${diffDays} days ago`
+  if (diffDays < 14) return '1 week ago'
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
+  if (diffDays < 60) return '1 month ago'
+  return `${Math.floor(diffDays / 30)} months ago`
 }
 function dateKeyFromDate(date: Date) {
   const year = date.getFullYear()
@@ -615,7 +631,7 @@ export default function Inventory() {
 
       const { data: invData, error: invError } = await supabase
         .from('fct_inventory_snapshot_daily')
-        .select('sku, asin, fnsku, marketplace, snapshot_date, fulfillable_quantity, available_quantity, reserved_quantity, total_inbound_quantity, unsellable_quantity')
+        .select('sku, asin, fnsku, marketplace, snapshot_date, fulfillable_quantity, available_quantity, reserved_quantity, total_inbound_quantity, unsellable_quantity, researching_quantity, reserved_customerorders, reserved_fc_transfers, reserved_fc_processing')
         .in('marketplace', markets)
         .eq('snapshot_date', latestDate)
         .limit(5000)
@@ -684,8 +700,31 @@ export default function Inventory() {
         const available  = row.available_quantity || 0
         const fulfillable = row.fulfillable_quantity || 0
         const inbound    = row.total_inbound_quantity || 0
-        const reserved   = row.reserved_quantity || 0
-        const totalFba   = fulfillable + inbound + reserved
+        const unsellable = row.unsellable_quantity || 0
+        const researching = row.researching_quantity || 0
+
+        // Reserved: prefer the breakdown from GET_RESERVED_INVENTORY_DATA
+        // (customer orders + FC transfers + FC processing) which matches
+        // what Seller Central UI shows. Fall back to the raw
+        // afn-reserved-quantity field from the MYI report only when the
+        // breakdown isn't available — older snapshots, or rows where the
+        // reserved-inventory ingestion hasn't run yet.
+        const reservedCustOrders = row.reserved_customerorders
+        const reservedFcTransfers = row.reserved_fc_transfers
+        const reservedFcProcessing = row.reserved_fc_processing
+        const hasBreakdown =
+          reservedCustOrders != null ||
+          reservedFcTransfers != null ||
+          reservedFcProcessing != null
+        const reserved = hasBreakdown
+          ? (reservedCustOrders || 0) + (reservedFcTransfers || 0) + (reservedFcProcessing || 0)
+          : (row.reserved_quantity || 0)
+
+        // Total FBA matches Amazon Seller Central's "Total" inventory view:
+        // every unit currently in Amazon's fulfillment network, regardless of
+        // sellability status. Includes researching + unsellable so the number
+        // reconciles with the UI.
+        const totalFba = fulfillable + inbound + reserved + unsellable + researching
         const doc = avgDailyUnits > 0 ? Math.round(totalFba / avgDailyUnits) : null
 
         return {
@@ -698,7 +737,7 @@ export default function Inventory() {
           reserved,
           inbound,
           total_fba:     totalFba,
-          unsellable:    row.unsellable_quantity || 0,
+          unsellable,
           avg_daily_units: Math.round(avgDailyUnits * 10) / 10,
           days_of_cover: doc,
           status:        getStatus(fulfillable, doc),
@@ -866,6 +905,28 @@ export default function Inventory() {
           <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Inventory</h1>
           <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
             Snapshot date: <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{snapshotDate || '—'}</span>
+            {snapshotDate && (() => {
+              const rel = relativeTime(snapshotDate)
+              const snap = new Date(`${snapshotDate}T00:00:00`)
+              const today = new Date()
+              today.setHours(0, 0, 0, 0)
+              const diffDays = Math.floor((today.getTime() - snap.getTime()) / (1000 * 60 * 60 * 24))
+              const color =
+                diffDays <= 1 ? 'var(--green)' :
+                diffDays <= 7 ? 'var(--text-muted)' :
+                diffDays <= 14 ? 'var(--yellow)' :
+                'var(--red)'
+              const bg =
+                diffDays <= 1 ? 'var(--green-light)' :
+                diffDays <= 7 ? 'var(--bg-hover)' :
+                diffDays <= 14 ? 'rgba(217,119,6,0.1)' :
+                'var(--red-light)'
+              return (
+                <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: bg, color }}>
+                  Updated {rel}
+                </span>
+              )
+            })()}
             {' · '}{inventory.length} SKUs across {markets.join(', ')}
           </p>
         </div>
@@ -944,9 +1005,6 @@ export default function Inventory() {
                         <th style={{ ...thSortable(sortKey === 'reserved'), textAlign: 'right' }} onClick={() => handleSort('reserved')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Reserved <SortIcon col="reserved" cur={sortKey} dir={sortDir} /></span>
                         </th>
-                        <th style={{ ...thSortable(sortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleSort('total_fba')}>
-                          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Total FBA <SortIcon col="total_fba" cur={sortKey} dir={sortDir} /></span>
-                        </th>
                         <th style={{ ...thSortable(sortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={sortKey} dir={sortDir} /></span>
                         </th>
@@ -973,7 +1031,6 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.fulfillable)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.reserved > 0 ? fmt(row.reserved) : '—'}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(row.total_fba)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
