@@ -75,14 +75,34 @@ function toISODate(d: Date) {
   return d.toISOString().split('T')[0]
 }
 
-// Get cutoff date for preset ranges
+// Return the Sunday of the most recently completed Sun–Sat week.
+// "Most recently completed" = the week whose Saturday is <= today.
+function mostRecentCompletedWeekStart(now: Date): Date {
+  const d = new Date(now)
+  d.setHours(12, 0, 0, 0) // avoid DST edges
+  // getDay(): Sun=0, Mon=1, ..., Sat=6
+  // Walk back to the most recent Saturday (or today if today is Sat)
+  const daysToLastSat = (d.getDay() + 1) % 7 // Sun→1, Mon→2, ..., Sat→0
+  d.setDate(d.getDate() - daysToLastSat)
+  // d is now the most recent Saturday. Subtract 6 to get that week's Sunday.
+  d.setDate(d.getDate() - 6)
+  return d
+}
+
+// Get cutoff date for preset ranges.
+// For "NW" presets, anchors to whole Sun–Sat weeks so the window
+// includes exactly N completed weeks of start_date values.
+// For YTD, returns Jan 1 of the current year.
 function getPresetCutoff(range: typeof PRESET_RANGES[0]): string | null {
   if (!range.days && !range.ytd) return null
   const now = new Date()
-  if (range.ytd) return new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0]
-  const d = new Date(now)
-  d.setDate(d.getDate() - range.days!)
-  return toISODate(d)
+  if (range.ytd) return toISODate(new Date(now.getFullYear(), 0, 1))
+
+  const weeks = range.days! / 7 // 7D→1, 4W→4, 8W→8, 13W→13
+  const latestWeekStart = mostRecentCompletedWeekStart(now)
+  const windowStart = new Date(latestWeekStart)
+  windowStart.setDate(windowStart.getDate() - 7 * (weeks - 1))
+  return toISODate(windowStart)
 }
 
 // Sunday-start week key helper → "YYYY-MM-DD" (week start date)
@@ -176,6 +196,15 @@ export default function ProductPerformance() {
       return { start: customStart || null, end: customEnd || today }
     }
     const range = PRESET_RANGES[rangeIdx]
+    // For week-based presets, anchor end to the latest completed Saturday
+    // so the header label and prior-period math align to whole weeks.
+    if (range.days) {
+      const latestSunday = mostRecentCompletedWeekStart(new Date())
+      const latestSaturday = new Date(latestSunday)
+      latestSaturday.setDate(latestSaturday.getDate() + 6)
+      return { start: getPresetCutoff(range), end: toISODate(latestSaturday) }
+    }
+    // YTD and ALL keep "today" as end
     return { start: getPresetCutoff(range), end: today }
   }, [rangeIdx, isCustom, customStart, customEnd])
 
@@ -211,10 +240,12 @@ export default function ProductPerformance() {
       let prevRows: any[] = []
       const range = PRESET_RANGES[rangeIdx]
       if (!isCustom && start && range.days) {
-        const prevEnd = new Date(start)
-        prevEnd.setDate(prevEnd.getDate() - 1)
+        // Prior period = same number of weeks, immediately before the current window.
+        const currStart = new Date(start + 'T12:00:00')
+        const prevEnd = new Date(currStart)
+        prevEnd.setDate(prevEnd.getDate() - 1) // Saturday before current window
         const prevStart = new Date(prevEnd)
-        prevStart.setDate(prevStart.getDate() - range.days)
+        prevStart.setDate(prevStart.getDate() - (range.days - 1))
         const { data: pd } = await supabase
           .from('fct_sales_daily')
           .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sku')
