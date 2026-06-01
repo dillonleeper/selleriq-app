@@ -98,7 +98,7 @@ function diagnosticMessage(p: ProductRow): string {
     case 'critical':
       return `Both conversion (${p.conv_rate.toFixed(1)}%) and buy box (${p.buy_box_pct?.toFixed(1)}%) are weak. Likely a pricing or listing issue — investigate competitor pricing first.`
     case 'low_conv':
-      return `Traffic is healthy (${fmt(p.sessions)} sessions) but conversion is only ${p.conv_rate.toFixed(1)}%. Listing content, images, reviews, or price are likely culprits.`
+      return `Traffic is healthy (${fmtUnits(p.sessions)} sessions) but conversion is only ${p.conv_rate.toFixed(1)}%. Listing content, images, reviews, or price are likely culprits.`
     case 'weak_bb':
       return `Buy box at ${p.buy_box_pct?.toFixed(1)}% means you're losing sales to competitors. Check pricing and seller competition.`
     case 'low_traffic':
