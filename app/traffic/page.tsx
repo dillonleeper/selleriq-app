@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
+import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line,
@@ -19,13 +20,9 @@ import {
 
 const CAD_TO_USD = 0.74
 
-const DATE_RANGES = [
-  { label: '4W',  days: 28  },
-  { label: '8W',  days: 56  },
-  { label: '13W', days: 91  },
-  { label: 'YTD', days: null, ytd: true },
-  { label: 'ALL', days: null },
-]
+const PRESET_LABELS: Record<DatePreset, string> = {
+  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
+}
 
 // Health classification thresholds. Tweak these once you have a feel
 // for what "good" looks like for your specific catalog.
@@ -70,13 +67,8 @@ function fmt(n: number) {
 function toUSD(amount: number, marketplace: string) {
   return marketplace === 'CA' ? amount * CAD_TO_USD : amount
 }
-function getDateCutoff(range: typeof DATE_RANGES[0]): string | null {
-  if (!range.days && !range.ytd) return null
-  const now = new Date()
-  if (range.ytd) return new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0]
-  const d = new Date(now)
-  d.setDate(d.getDate() - range.days! - 7)
-  return d.toISOString().split('T')[0]
+function fmtDateLabel(iso: string) {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 function truncate(s: string, n: number) {
   return s && s.length > n ? s.slice(0, n) + '…' : s
@@ -152,7 +144,7 @@ function Sparkline({ data, dataKey, positive }: { data: WeeklyPoint[], dataKey: 
 
 export default function TrafficConversion() {
   const [markets, setMarkets] = useState(['US', 'CA'])
-  const [rangeIdx, setRangeIdx] = useState(2) // default 13W for traffic — more meaningful trends
+  const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [products, setProducts] = useState<ProductRow[]>([])
   const [allWeeklyData, setAllWeeklyData] = useState<Record<string, WeeklyPoint[]>>({})
   const [loading, setLoading] = useState(true)
@@ -165,41 +157,34 @@ export default function TrafficConversion() {
   const PAGE_SIZE = 50
 
   useEffect(() => {
+    if (!dateRange || !dateRange.startDate) return
     async function load() {
+      const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
       setExpandedSku(null)
       setPage(0)
-      const range = DATE_RANGES[rangeIdx]
-      const cutoff = getDateCutoff(range)
 
       let query = supabase
         .from('fct_sales_daily')
         .select('start_date, marketplace, units_ordered, sessions, page_views, buy_box_percentage, unit_session_percentage, sku, title')
         .in('marketplace', markets)
+        .gte('start_date', startDate)
+        .lte('start_date', endDate)
         .order('start_date', { ascending: true })
         .limit(20000)
-
-      if (cutoff) query = query.gte('start_date', cutoff)
 
       const { data, error } = await query
       if (error) { console.error(error); setLoading(false); return }
 
       // Fetch prior period for conversion delta
-      let prevRows: any[] = []
-      if (cutoff && range.days) {
-        const prevEnd = new Date(cutoff)
-        prevEnd.setDate(prevEnd.getDate() - 1)
-        const prevStart = new Date(prevEnd)
-        prevStart.setDate(prevStart.getDate() - range.days)
-        const { data: pd } = await supabase
-          .from('fct_sales_daily')
-          .select('marketplace, units_ordered, sessions, sku')
-          .in('marketplace', markets)
-          .gte('start_date', prevStart.toISOString().split('T')[0])
-          .lte('start_date', prevEnd.toISOString().split('T')[0])
-          .limit(20000)
-        prevRows = pd || []
-      }
+      const { data: pd } = await supabase
+        .from('fct_sales_daily')
+        .select('marketplace, units_ordered, sessions, sku')
+        .in('marketplace', markets)
+        .gte('start_date', priorStart)
+        .lte('start_date', priorEnd)
+        .limit(20000)
+      const prevRows: any[] = pd || []
 
       // Aggregate current period by SKU
       const bySku: Record<string, {
@@ -293,7 +278,7 @@ export default function TrafficConversion() {
       setLoading(false)
     }
     load()
-  }, [markets, rangeIdx])
+  }, [markets, dateRange])
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -345,17 +330,14 @@ export default function TrafficConversion() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `selleriq-traffic-${DATE_RANGES[rangeIdx].label}.csv`
+    a.download = `selleriq-traffic-${dateRange ? dateRange.preset : 'range'}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  const range = DATE_RANGES[rangeIdx]
-  const cutoff = getDateCutoff(range)
-  const endDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  const startDate = cutoff
-    ? new Date(cutoff + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : 'Jan 5, 2025'
+  const rangeLabel = dateRange ? PRESET_LABELS[dateRange.preset] : ''
+  const startDate = dateRange && dateRange.startDate ? fmtDateLabel(dateRange.startDate) : '—'
+  const endDate = dateRange && dateRange.endDate ? fmtDateLabel(dateRange.endDate) : '—'
 
   const SortIcon = ({ col }: { col: SortKey }) => {
     if (sortKey !== col) return <ArrowUpDown size={10} style={{ opacity: 0.3 }} />
@@ -402,19 +384,7 @@ export default function TrafficConversion() {
           >
             <Download size={12} /> Export CSV
           </button>
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginRight: '4px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Range</span>
-            {DATE_RANGES.map((r, i) => (
-              <button key={r.label} onClick={() => setRangeIdx(i)} style={{
-                padding: '4px 10px', borderRadius: '6px',
-                border: rangeIdx === i ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                background: rangeIdx === i ? 'var(--accent-light)' : 'transparent',
-                color: rangeIdx === i ? 'var(--accent)' : 'var(--text-muted)',
-                fontSize: '11px', fontWeight: 500, cursor: 'pointer',
-                transition: 'all 0.12s ease', fontFamily: 'JetBrains Mono, monospace',
-              }}>{r.label}</button>
-            ))}
-          </div>
+          <DateRangeFilter onChange={setDateRange} />
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
         </div>
       </div>
@@ -425,7 +395,7 @@ export default function TrafficConversion() {
         marginBottom: '20px',
       }}>
         {[
-          { label: 'Total Sessions', value: fmt(totalSessions), sub: `${range.label} window` },
+          { label: 'Total Sessions', value: fmt(totalSessions), sub: `${rangeLabel} window` },
           { label: 'Avg Conversion', value: overallConv.toFixed(2) + '%', sub: 'session-weighted' },
           { label: 'Avg Buy Box', value: overallBB !== null ? overallBB.toFixed(1) + '%' : '—', sub: `${bbProducts.length} SKUs` },
           { label: 'Needs Attention', value: needsAttentionCount.toString(), sub: 'flagged SKUs',

@@ -3,27 +3,21 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
+import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line
 } from 'recharts'
 import {
   ChevronDown, ChevronRight, TrendingUp, TrendingDown,
-  Minus, ArrowUpDown, ArrowUp, ArrowDown, Search, Download, Calendar
+  Minus, ArrowUpDown, ArrowUp, ArrowDown, Search, Download
 } from 'lucide-react'
 
 const CAD_TO_USD = 0.74
 
-// ─── Date range presets ───────────────────────────────────────
-const PRESET_RANGES = [
-  { label: '7D',  days: 7   },
-  { label: '4W',  days: 28  },
-  { label: '8W',  days: 56  },
-  { label: '13W', days: 91  },
-  { label: 'YTD', days: null, ytd: true },
-  { label: 'ALL', days: null },
-  { label: 'Custom', days: null, custom: true },
-]
+const PRESET_LABELS: Record<DatePreset, string> = {
+  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
+}
 
 type CadenceGrouping = 'day' | 'week' | 'month'
 
@@ -73,36 +67,6 @@ function sanitizeId(s: string) {
 }
 function toISODate(d: Date) {
   return d.toISOString().split('T')[0]
-}
-
-// Return the Sunday of the most recently completed Sun–Sat week.
-// "Most recently completed" = the week whose Saturday is <= today.
-function mostRecentCompletedWeekStart(now: Date): Date {
-  const d = new Date(now)
-  d.setHours(12, 0, 0, 0) // avoid DST edges
-  // getDay(): Sun=0, Mon=1, ..., Sat=6
-  // Walk back to the most recent Saturday (or today if today is Sat)
-  const daysToLastSat = (d.getDay() + 1) % 7 // Sun→1, Mon→2, ..., Sat→0
-  d.setDate(d.getDate() - daysToLastSat)
-  // d is now the most recent Saturday. Subtract 6 to get that week's Sunday.
-  d.setDate(d.getDate() - 6)
-  return d
-}
-
-// Get cutoff date for preset ranges.
-// For "NW" presets, anchors to whole Sun–Sat weeks so the window
-// includes exactly N completed weeks of start_date values.
-// For YTD, returns Jan 1 of the current year.
-function getPresetCutoff(range: typeof PRESET_RANGES[0]): string | null {
-  if (!range.days && !range.ytd) return null
-  const now = new Date()
-  if (range.ytd) return toISODate(new Date(now.getFullYear(), 0, 1))
-
-  const weeks = range.days! / 7 // 7D→1, 4W→4, 8W→8, 13W→13
-  const latestWeekStart = mostRecentCompletedWeekStart(now)
-  const windowStart = new Date(latestWeekStart)
-  windowStart.setDate(windowStart.getDate() - 7 * (weeks - 1))
-  return toISODate(windowStart)
 }
 
 // Sunday-start week key helper → "YYYY-MM-DD" (week start date)
@@ -171,9 +135,7 @@ function Sparkline({ data, positive }: { data: DataPoint[], positive: boolean | 
 // ─── Main Component ───────────────────────────────────────────
 export default function ProductPerformance() {
   const [markets, setMarkets]           = useState(['US', 'CA'])
-  const [rangeIdx, setRangeIdx]         = useState(3)           // default 8W
-  const [customStart, setCustomStart]   = useState<string>('')
-  const [customEnd, setCustomEnd]       = useState<string>('')
+  const [dateRange, setDateRange]       = useState<DateRange | null>(null)
   const [products, setProducts]         = useState<ProductRow[]>([])
   const [allPeriodData, setAllPeriodData] = useState<Record<string, DataPoint[]>>({})
   const [loading, setLoading]           = useState(true)
@@ -187,74 +149,37 @@ export default function ProductPerformance() {
   const [cadenceGrouping, setCadenceGrouping] = useState<CadenceGrouping>('week')
 
   const PAGE_SIZE = 50
-  const isCustom = PRESET_RANGES[rangeIdx]?.custom === true
-
-  // ─── Compute active date range ──────────────────────────────
-  const getActiveDateRange = useCallback((): { start: string | null, end: string } => {
-    const today = toISODate(new Date())
-    if (isCustom) {
-      return { start: customStart || null, end: customEnd || today }
-    }
-    const range = PRESET_RANGES[rangeIdx]
-    // For week-based presets, anchor end to the latest completed Saturday
-    // so the header label and prior-period math align to whole weeks.
-    if (range.days) {
-      const latestSunday = mostRecentCompletedWeekStart(new Date())
-      const latestSaturday = new Date(latestSunday)
-      latestSaturday.setDate(latestSaturday.getDate() + 6)
-      return { start: getPresetCutoff(range), end: toISODate(latestSaturday) }
-    }
-    // YTD and ALL keep "today" as end
-    return { start: getPresetCutoff(range), end: today }
-  }, [rangeIdx, isCustom, customStart, customEnd])
 
   // ─── Data loading ────────────────────────────────────────────
   useEffect(() => {
+    if (!dateRange || !dateRange.startDate) return
     async function load() {
+      const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
       setExpandedSku(null)
       setPage(0)
-
-      const { start, end } = getActiveDateRange()
-
-      // Skip if custom range is incomplete
-      if (isCustom && !customStart) {
-        setLoading(false)
-        return
-      }
 
       let query = supabase
         .from('fct_sales_daily')
         .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, buy_box_percentage, sku, title')
         .in('marketplace', markets)
-        .lte('start_date', end)
+        .gte('start_date', startDate)
+        .lte('start_date', endDate)
         .order('start_date', { ascending: true })
         .limit(50000)
-
-      if (start) query = query.gte('start_date', start)
 
       const { data, error } = await query
       if (error) { console.error(error); setLoading(false); return }
 
-      // Fetch prior period for comparison (only for presets with defined days)
-      let prevRows: any[] = []
-      const range = PRESET_RANGES[rangeIdx]
-      if (!isCustom && start && range.days) {
-        // Prior period = same number of weeks, immediately before the current window.
-        const currStart = new Date(start + 'T12:00:00')
-        const prevEnd = new Date(currStart)
-        prevEnd.setDate(prevEnd.getDate() - 1) // Saturday before current window
-        const prevStart = new Date(prevEnd)
-        prevStart.setDate(prevStart.getDate() - (range.days - 1))
-        const { data: pd } = await supabase
-          .from('fct_sales_daily')
-          .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sku')
-          .in('marketplace', markets)
-          .gte('start_date', toISODate(prevStart))
-          .lte('start_date', toISODate(prevEnd))
-          .limit(50000)
-        prevRows = pd || []
-      }
+      // Fetch prior period for comparison
+      const { data: pd } = await supabase
+        .from('fct_sales_daily')
+        .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sku')
+        .in('marketplace', markets)
+        .gte('start_date', priorStart)
+        .lte('start_date', priorEnd)
+        .limit(50000)
+      const prevRows: any[] = pd || []
 
       // Aggregate by SKU
       const bySku: Record<string, {
@@ -327,7 +252,7 @@ export default function ProductPerformance() {
       setLoading(false)
     }
     load()
-  }, [markets, rangeIdx, customStart, customEnd])
+  }, [markets, dateRange])
 
   // ─── Re-bucket daily data into chosen grouping ───────────────
   const getBucketedData = useCallback((sku: string): DataPoint[] => {
@@ -390,12 +315,12 @@ export default function ProductPerformance() {
     .sort((a, b) => b.total - a.total)
 
   // ─── Display date range label ─────────────────────────────────
-  const { start, end } = getActiveDateRange()
-  const displayStart = start
-    ? new Date(start + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : 'Jan 1, 2025'
-  const displayEnd = new Date(end + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  const activeLabel = isCustom && customStart ? `${displayStart} — ${displayEnd}` : `${displayStart} — ${displayEnd}`
+  const fmtDateLabel = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const hasRange = !!(dateRange && dateRange.startDate)
+  const activeLabel = hasRange
+    ? `${fmtDateLabel(dateRange!.startDate)} — ${fmtDateLabel(dateRange!.endDate)}`
+    : 'Select a date range'
 
   // ─── CSV exports ──────────────────────────────────────────────
   const exportCSV = () => {
@@ -485,77 +410,11 @@ export default function ProductPerformance() {
           </button>
 
           {/* Range presets */}
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginRight: '4px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Range</span>
-            {PRESET_RANGES.map((r, i) => (
-              <button key={r.label} onClick={() => { setRangeIdx(i); setPage(0) }} style={{
-                padding: '4px 10px', borderRadius: '6px',
-                border: rangeIdx === i ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                background: rangeIdx === i ? 'var(--accent-light)' : 'transparent',
-                color: rangeIdx === i ? 'var(--accent)' : 'var(--text-muted)',
-                fontSize: '11px', fontWeight: 500, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: '4px',
-                fontFamily: r.custom ? 'inherit' : 'JetBrains Mono, monospace',
-              }}>
-                {r.custom && <Calendar size={10} />}
-                {r.label}
-              </button>
-            ))}
-          </div>
+          <DateRangeFilter onChange={r => { setDateRange(r); setPage(0) }} />
 
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
         </div>
       </div>
-
-      {/* Custom date range inputs */}
-      {isCustom && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          padding: '12px 16px', marginBottom: '16px',
-          background: 'var(--bg-card)', border: '1px solid var(--accent-border)',
-          borderRadius: '10px', flexWrap: 'wrap',
-        }}>
-          <Calendar size={13} color="var(--accent)" />
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Custom range:</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <input
-              type="date"
-              value={customStart}
-              onChange={e => setCustomStart(e.target.value)}
-              style={{
-                padding: '5px 10px', borderRadius: '6px', fontSize: '12px',
-                border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-                color: 'var(--text-primary)', cursor: 'pointer', outline: 'none',
-                fontFamily: 'JetBrains Mono, monospace',
-              }}
-            />
-            <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>to</span>
-            <input
-              type="date"
-              value={customEnd}
-              max={toISODate(new Date())}
-              onChange={e => setCustomEnd(e.target.value)}
-              style={{
-                padding: '5px 10px', borderRadius: '6px', fontSize: '12px',
-                border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-                color: 'var(--text-primary)', cursor: 'pointer', outline: 'none',
-                fontFamily: 'JetBrains Mono, monospace',
-              }}
-            />
-          </div>
-          {customStart && customEnd && (
-            <span style={{ fontSize: '11px', color: 'var(--accent)', fontFamily: 'JetBrains Mono, monospace' }}>
-              {Math.round((new Date(customEnd).getTime() - new Date(customStart).getTime()) / (1000 * 60 * 60 * 24))} days selected
-            </span>
-          )}
-          {customStart && !customEnd && (
-            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Select an end date</span>
-          )}
-          {!customStart && (
-            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Select a start date</span>
-          )}
-        </div>
-      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0', marginBottom: '16px', borderBottom: '1px solid var(--border)' }}>
@@ -596,12 +455,12 @@ export default function ProductPerformance() {
         )}
       </div>
 
-      {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
-      ) : isCustom && !customStart ? (
+      {dateRange?.preset === 'custom' && !dateRange.startDate ? (
         <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>
           Select a start date above to load data
         </div>
+      ) : loading ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
       ) : tab === 'summary' ? (
 
         /* ── SUMMARY TAB ── */

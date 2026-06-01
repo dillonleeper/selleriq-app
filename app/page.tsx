@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
+import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, BarChart, Bar
@@ -14,13 +15,9 @@ import {
 
 const CAD_TO_USD = 0.74
 
-const DATE_RANGES = [
-  { label: '4W',  days: 28  },
-  { label: '8W',  days: 56  },
-  { label: '13W', days: 91  },
-  { label: 'YTD', days: null, ytd: true },
-  { label: 'ALL', days: null },
-]
+const PRESET_LABELS: Record<DatePreset, string> = {
+  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
+}
 
 type WeeklyRow = {
   raw_date: string
@@ -52,13 +49,8 @@ function fmtASP(n: number) { return '$' + n.toFixed(2) }
 function toUSD(amount: number, marketplace: string) {
   return marketplace === 'CA' ? amount * CAD_TO_USD : amount
 }
-function getDateCutoff(range: typeof DATE_RANGES[0]): string | null {
-  if (!range.days && !range.ytd) return null
-  const now = new Date()
-  if (range.ytd) return new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0]
-  const d = new Date(now)
-  d.setDate(d.getDate() - range.days! - 7)
-  return d.toISOString().split('T')[0]
+function fmtDateLabel(iso: string) {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -79,7 +71,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export default function SalesOverview() {
   const [markets, setMarkets] = useState(['US', 'CA'])
-  const [rangeIdx, setRangeIdx] = useState(4)
+  const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [weeklyData, setWeeklyData] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
   const [productStats, setProductStats] = useState<ProductStat[]>([])
@@ -162,42 +154,36 @@ export default function SalesOverview() {
 
   // Main data fetch
   useEffect(() => {
+    if (!dateRange || !dateRange.startDate) return
     async function load() {
+      const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
-      const range = DATE_RANGES[rangeIdx]
-      const cutoff = getDateCutoff(range)
 
       let query = supabase
         .from('fct_sales_daily')
         .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, page_views, sku, title')
         .in('marketplace', markets)
+        .gte('start_date', startDate)
+        .lte('start_date', endDate)
         .order('start_date', { ascending: true })
         .limit(100000)
 
-      if (cutoff) query = query.gte('start_date', cutoff)
       if (selectedProducts.length > 0) query = query.in('sku', selectedProducts.map(p => p.sku))
 
       const { data, error } = await query
       if (error) { console.error(error); setLoading(false); return }
 
-      // Previous period
-      let prevRows: any[] = []
-      if (cutoff && range.days) {
-        const prevEnd = new Date(cutoff)
-        prevEnd.setDate(prevEnd.getDate() - 1)
-        const prevStart = new Date(prevEnd)
-        prevStart.setDate(prevStart.getDate() - range.days)
-        let prevQuery = supabase
-          .from('fct_sales_daily')
-          .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, page_views, sku')
-          .in('marketplace', markets)
-          .gte('start_date', prevStart.toISOString().split('T')[0])
-          .lte('start_date', prevEnd.toISOString().split('T')[0])
-          .limit(100000)
-        if (selectedProducts.length > 0) prevQuery = prevQuery.in('sku', selectedProducts.map(p => p.sku))
-        const { data: pd } = await prevQuery
-        prevRows = pd || []
-      }
+      // Prior period
+      let prevQuery = supabase
+        .from('fct_sales_daily')
+        .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, page_views, sku')
+        .in('marketplace', markets)
+        .gte('start_date', priorStart)
+        .lte('start_date', priorEnd)
+        .limit(100000)
+      if (selectedProducts.length > 0) prevQuery = prevQuery.in('sku', selectedProducts.map(p => p.sku))
+      const { data: pd } = await prevQuery
+      const prevRows: any[] = pd || []
 
       const aggregate = (rows: any[]): WeeklyRow[] => {
         const byWeek: Record<string, WeeklyRow> = {}
@@ -248,7 +234,7 @@ export default function SalesOverview() {
       setLoading(false)
     }
     load()
-  }, [markets, rangeIdx, selectedProducts])
+  }, [markets, dateRange, selectedProducts])
 
   const sum = (key: keyof WeeklyRow) => weeklyData.reduce((s, r) => s + (r[key] as number), 0)
   const prevSum = (key: keyof WeeklyRow) => prevData.reduce((s, r) => s + (r[key] as number), 0)
@@ -266,7 +252,7 @@ export default function SalesOverview() {
   const convRate     = totalSessions > 0 ? (totalUnits / totalSessions) * 100 : 0
   const prevConvRate = prevSessions > 0 ? (prevUnits / prevSessions) * 100 : 0
   const trend = (curr: number, prev: number) => prev > 0 ? ((curr - prev) / prev) * 100 : null
-  const rangeLabel = DATE_RANGES[rangeIdx].label
+  const rangeLabel = dateRange ? PRESET_LABELS[dateRange.preset] : ''
 
   // Top sellers
   const topSellers = [...productStats]
@@ -302,30 +288,14 @@ export default function SalesOverview() {
             All revenue in USD
             {' · '}
             <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>
-              {(() => {
-                const cutoff = getDateCutoff(DATE_RANGES[rangeIdx])
-                const end = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                if (!cutoff) return `Jan 5, 2025 — ${end}`
-                const start = new Date(cutoff + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                return `${start} — ${end}`
-              })()}
+              {dateRange && dateRange.startDate
+                ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}`
+                : 'Select a date range'}
             </span>
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginRight: '4px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Range</span>
-            {DATE_RANGES.map((r, i) => (
-              <button key={r.label} onClick={() => setRangeIdx(i)} style={{
-                padding: '4px 10px', borderRadius: '6px',
-                border: rangeIdx === i ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                background: rangeIdx === i ? 'var(--accent-light)' : 'transparent',
-                color: rangeIdx === i ? 'var(--accent)' : 'var(--text-muted)',
-                fontSize: '11px', fontWeight: 500, cursor: 'pointer',
-                transition: 'all 0.12s ease', fontFamily: 'JetBrains Mono, monospace',
-              }}>{r.label}</button>
-            ))}
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <DateRangeFilter onChange={setDateRange} />
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
         </div>
       </div>
@@ -508,7 +478,7 @@ export default function SalesOverview() {
                 )}
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                USD · {DATE_RANGES[rangeIdx].label === 'ALL' ? 'Jan 2025 — present' : `Last ${DATE_RANGES[rangeIdx].label}`}
+                USD · {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
               </div>
             </div>
             <ResponsiveContainer width="100%" height={220}>
@@ -605,13 +575,13 @@ export default function SalesOverview() {
                   Top Gainers & Losers
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  {hasPriorPeriod ? `Revenue change vs prior ${rangeLabel} period` : 'Select a date range with a prior period to see changes'}
+                  {hasPriorPeriod ? `Revenue change vs prior ${rangeLabel} period` : 'No prior-period data available to compare'}
                 </div>
               </div>
 
               {!hasPriorPeriod ? (
                 <div style={{ color: 'var(--text-dim)', fontSize: '12px', paddingTop: '8px' }}>
-                  Switch to 7D, 30D, or 90D to compare against the prior period.
+                  No products had revenue in the prior period for this range.
                 </div>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0' }}>
