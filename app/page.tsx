@@ -304,13 +304,19 @@ export default function SalesOverview() {
 
   const hasPriorPeriod = prevData.length > 0
 
+  // Preset-aware empty-state label for the prior-period comparison line.
+  const noPriorLabel =
+    dateRange?.preset === 'ytd' ? 'No prior year data'
+    : dateRange?.preset === 'mtd' ? 'No prior month data'
+    : 'No prior period'
+
   const cards = [
-    { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} prior period` : 'No prior period', trend: trend(totalRevenue, prevRevenue), icon: <DollarSign size={14} />, color: 'var(--accent)' },
-    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: prevUnits > 0 ? `${fmtUnits(prevUnits)} prior period` : 'No prior period', trend: trend(totalUnits, prevUnits), icon: <ShoppingCart size={14} />, color: 'var(--green)' },
-    { label: `Sessions (${rangeLabel})`, value: fmt(totalSessions), sub: prevSessions > 0 ? `${fmt(prevSessions)} prior period` : 'No prior period', trend: trend(totalSessions, prevSessions), icon: <Eye size={14} />, color: 'var(--yellow)' },
-    { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: prevAsp > 0 ? `${fmtASP(prevAsp)} prior period` : 'No prior period', trend: trend(asp, prevAsp), icon: <BarChart2 size={14} />, color: '#6366F1' },
-    { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% prior period` : 'No prior period', trend: trend(convRate, prevConvRate), icon: <Percent size={14} />, color: '#EC4899' },
-    { label: `Page Views (${rangeLabel})`, value: fmt(totalPageViews), sub: 'total page views', trend: null, icon: <MousePointer size={14} />, color: '#10B981' },
+    { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} prior period` : noPriorLabel, trend: trend(totalRevenue, prevRevenue), icon: <DollarSign size={14} />, color: 'var(--accent)' },
+    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: prevUnits > 0 ? `${fmtUnits(prevUnits)} prior period` : noPriorLabel, trend: trend(totalUnits, prevUnits), icon: <ShoppingCart size={14} />, color: 'var(--green)' },
+    { label: `Sessions (${rangeLabel})`, value: fmtUnits(totalSessions), sub: prevSessions > 0 ? `${fmtUnits(prevSessions)} prior period` : noPriorLabel, trend: trend(totalSessions, prevSessions), icon: <Eye size={14} />, color: 'var(--yellow)' },
+    { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: prevAsp > 0 ? `${fmtASP(prevAsp)} prior period` : noPriorLabel, trend: trend(asp, prevAsp), icon: <BarChart2 size={14} />, color: '#6366F1' },
+    { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% prior period` : noPriorLabel, trend: trend(convRate, prevConvRate), icon: <Percent size={14} />, color: '#EC4899' },
+    { label: `Page Views (${rangeLabel})`, value: fmtUnits(totalPageViews), sub: 'total page views', trend: null, icon: <MousePointer size={14} />, color: '#10B981' },
   ]
 
   const truncate = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + '…' : s

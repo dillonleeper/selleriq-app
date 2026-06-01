@@ -532,7 +532,7 @@ export default function ProductPerformance() {
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtCurrency(p.revenue)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.units)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>${p.asp.toFixed(2)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmt(p.sessions)}</td>
+                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.sessions)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{p.conv_rate.toFixed(1)}%</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—'}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right' }}>
@@ -558,7 +558,7 @@ export default function ProductPerformance() {
                                     { label: 'Revenue',   value: fmtCurrency(p.revenue) },
                                     { label: 'Units',     value: fmtUnits(p.units) },
                                     { label: 'ASP',       value: '$' + p.asp.toFixed(2) },
-                                    { label: 'Sessions',  value: fmt(p.sessions) },
+                                    { label: 'Sessions',  value: fmtUnits(p.sessions) },
                                     { label: 'Conv Rate', value: p.conv_rate.toFixed(1) + '%' },
                                     { label: 'Buy Box',   value: p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—' },
                                     ...(p.wow_change !== null ? [{ label: 'vs Prior', value: (p.wow_change > 0 ? '+' : '') + p.wow_change.toFixed(1) + '%', color: p.wow_change > 0 ? 'var(--green)' : 'var(--red)' }] : []),

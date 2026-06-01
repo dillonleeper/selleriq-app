@@ -399,7 +399,7 @@ export default function TrafficConversion() {
         marginBottom: '20px',
       }}>
         {[
-          { label: 'Total Sessions', value: fmt(totalSessions), sub: `${rangeLabel} window` },
+          { label: 'Total Sessions', value: fmtUnits(totalSessions), sub: `${rangeLabel} window` },
           { label: 'Avg Conversion', value: overallConv.toFixed(2) + '%', sub: 'session-weighted' },
           { label: 'Avg Buy Box', value: overallBB !== null ? overallBB.toFixed(1) + '%' : '—', sub: `${bbProducts.length} SKUs` },
           { label: 'Needs Attention', value: needsAttentionCount.toString(), sub: 'flagged SKUs',
@@ -535,8 +535,8 @@ export default function TrafficConversion() {
                               <HealthIcon size={11} /> {meta.label}
                             </span>
                           </td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmt(p.sessions)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmt(p.page_views)}</td>
+                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.sessions)}</td>
+                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.page_views)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{p.views_per_session.toFixed(2)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: p.buy_box_pct !== null && p.buy_box_pct < BUY_BOX_WARN ? 'var(--red)' : p.buy_box_pct !== null && p.buy_box_pct >= BUY_BOX_OK ? 'var(--green)' : 'var(--text-primary)' }}>{p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—'}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: p.conv_rate < LOW_CONV_THRESHOLD ? 'var(--red)' : p.conv_rate >= HEALTHY_CONV_THRESHOLD ? 'var(--green)' : 'var(--text-primary)' }}>{p.conv_rate.toFixed(1)}%</td>
@@ -573,8 +573,8 @@ export default function TrafficConversion() {
                                 {/* Funnel stats */}
                                 <div style={{ display: 'flex', gap: '28px', marginBottom: '20px', flexWrap: 'wrap' }}>
                                   {[
-                                    { label: 'Sessions', value: fmt(p.sessions) },
-                                    { label: 'Page Views', value: fmt(p.page_views) },
+                                    { label: 'Sessions', value: fmtUnits(p.sessions) },
+                                    { label: 'Page Views', value: fmtUnits(p.page_views) },
                                     { label: 'Views/Session', value: p.views_per_session.toFixed(2) },
                                     { label: 'Buy Box', value: p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—' },
                                     { label: 'Conv Rate', value: p.conv_rate.toFixed(1) + '%' },
