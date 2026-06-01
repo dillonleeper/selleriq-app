@@ -60,13 +60,27 @@ type FbaReplenRow = {
   urgency: 'critical' | 'reorder' | 'healthy'
 }
 
+// ── Multi-warehouse (frontend/localStorage only) ──
+const WAREHOUSE_IDS = ['wh1', 'wh2', 'wh3', 'wh4'] as const
+type WarehouseId = typeof WAREHOUSE_IDS[number]
+
+type WarehouseConfig = {
+  id: WarehouseId
+  label: string          // user-provided name, e.g. "Dallas 3PL"
+  active: boolean        // derived: true if any SKU has qty > 0 for this warehouse
+}
+
+// per-SKU, per-warehouse qty
+type WarehouseQtyMap = Record<string, Partial<Record<WarehouseId, number>>>
+
 type SupplierReplenRow = {
   sku: string
   title: string
   asin: string
   total_fba: number
-  warehouse_qty: number
-  total_inventory: number
+  warehouse_qtys: Partial<Record<WarehouseId, number>>  // only populated for active whs
+  warehouse_total: number                                // sum across active whs
+  total_inventory: number                                // total_fba + warehouse_total
   avg_daily_units: number
   days_of_cover_total: number | null
   units_to_order: number
@@ -535,15 +549,39 @@ export default function Inventory() {
   const [showFbaConfirm, setShowFbaConfirm] = useState(false)
   const [showSupConfirm, setShowSupConfirm] = useState(false)
 
-  // ── Warehouse inventory ──
-  const [warehouseQty, setWarehouseQty] = useState<Record<string, number>>(() => {
+  // ── Warehouse inventory (multi-warehouse, localStorage only) ──
+  const [warehouseQty, setWarehouseQty] = useState<WarehouseQtyMap>(() => {
     if (typeof window === 'undefined') return {}
-    try { return JSON.parse(localStorage.getItem('selleriq_warehouse_qty') || '{}') } catch { return {} }
+    try {
+      const v2 = localStorage.getItem('selleriq_warehouse_qty_v2')
+      if (v2) return JSON.parse(v2)
+      // One-time migration: old single-warehouse map (sku -> qty) → wh1.
+      const old = localStorage.getItem('selleriq_warehouse_qty')
+      if (old) {
+        const flat: Record<string, number> = JSON.parse(old)
+        const migrated: WarehouseQtyMap = {}
+        for (const [sku, qty] of Object.entries(flat)) {
+          migrated[sku] = { wh1: typeof qty === 'number' ? qty : 0 }
+        }
+        localStorage.setItem('selleriq_warehouse_qty_v2', JSON.stringify(migrated))
+        return migrated
+      }
+      return {}
+    } catch { return {} }
+  })
+  const [warehouseLabels, setWarehouseLabels] = useState<Record<WarehouseId, string>>(() => {
+    const defaults: Record<WarehouseId, string> = { wh1: 'Warehouse 1', wh2: 'Warehouse 2', wh3: 'Warehouse 3', wh4: 'Warehouse 4' }
+    if (typeof window === 'undefined') return defaults
+    try {
+      const stored = localStorage.getItem('selleriq_warehouse_labels')
+      return stored ? { ...defaults, ...JSON.parse(stored) } : defaults
+    } catch { return defaults }
   })
   const [warehouseUploadDate, setWarehouseUploadDate] = useState<string>(() =>
     typeof window !== 'undefined' ? localStorage.getItem('selleriq_warehouse_upload_date') || '' : ''
   )
   const [unmatchedSkus, setUnmatchedSkus] = useState<string[]>([])
+  const [warehouseWarning, setWarehouseWarning] = useState<string>('')
   const [showUnmatched, setShowUnmatched] = useState(false)
 
   const supplierLeadDays    = prodDays + shipDays
@@ -551,8 +589,8 @@ export default function Inventory() {
 
   const downloadTemplate = () => {
     const allSkus = [...new Set(inventory.map(r => r.sku).filter(Boolean))]
-    const rows = allSkus.map(sku => `${sku},0`)
-    const csv = 'sku,warehouse_qty\n' + rows.join('\n')
+    const rows = allSkus.map(sku => `${sku},0,0,0,0`)
+    const csv = 'sku,Warehouse 1,Warehouse 2,Warehouse 3,Warehouse 4\n' + rows.join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -567,29 +605,60 @@ export default function Inventory() {
     reader.onload = (evt) => {
       const text = evt.target?.result as string
       const lines = text.trim().split('\n')
-      const header = lines[0].toLowerCase().replace(/\s/g, '')
-      if (!header.includes('sku') || !header.includes('warehouse_qty')) {
-        alert('Invalid CSV format. Please use the template with columns: sku, warehouse_qty')
+      if (lines.length === 0) return
+
+      // Header row drives both validation and warehouse labels.
+      const headerCols = lines[0].split(',')
+      if ((headerCols[0] || '').trim().toLowerCase() !== 'sku') {
+        alert('Invalid CSV format. Column 1 must be "sku", followed by up to 4 warehouse columns. Use the template.')
         return
       }
-      const newQty: Record<string, number> = {}
+
+      const warnings: string[] = []
+      const totalWhCols = headerCols.length - 1
+      const nWh = Math.min(Math.max(totalWhCols, 0), 4)   // import at most 4 warehouse columns
+      if (totalWhCols > 4) warnings.push('Only the first 4 warehouse columns were imported.')
+
+      // Header text per column (trimmed, case preserved). Blank → resolved to "Warehouse {n}" below.
+      const headerLabels: string[] = []
+      for (let c = 1; c <= nWh; c++) headerLabels.push((headerCols[c] || '').trim())
+
+      const newQty: WarehouseQtyMap = {}
       const unmatched: string[] = []
       const knownSkus = new Set(inventory.map(r => r.sku))
+
       for (let i = 1; i < lines.length; i++) {
         const parts = lines[i].split(',')
-        if (parts.length < 2) continue
-        const sku = parts[0].trim()
-        const qty = parseInt(parts[1].trim(), 10)
+        const sku = (parts[0] || '').trim()
         if (!sku) continue
-        newQty[sku] = isNaN(qty) ? 0 : qty
+        const perWh: Partial<Record<WarehouseId, number>> = {}
+        for (let c = 0; c < nWh; c++) {
+          const raw = (parts[c + 1] ?? '').trim()
+          const qty = parseInt(raw, 10)
+          // Empty cells become 0 (not undefined) so a re-upload that drops a SKU's qty actually clears it.
+          perWh[WAREHOUSE_IDS[c]] = isNaN(qty) ? 0 : qty
+        }
+        newQty[sku] = perWh
         if (!knownSkus.has(sku)) unmatched.push(sku)
       }
+
+      // Resolve labels: verbatim header where present, else "Warehouse {n}" fallback
+      // (covers the blank-header-but-has-data case so the data isn't silently lost).
+      const newLabels: Record<WarehouseId, string> = { wh1: 'Warehouse 1', wh2: 'Warehouse 2', wh3: 'Warehouse 3', wh4: 'Warehouse 4' }
+      for (let c = 0; c < nWh; c++) {
+        newLabels[WAREHOUSE_IDS[c]] = headerLabels[c] || `Warehouse ${c + 1}`
+      }
+
       setWarehouseQty(newQty)
+      setWarehouseLabels(newLabels)
       setUnmatchedSkus(unmatched)
-      if (unmatched.length > 0) setShowUnmatched(true)
+      setWarehouseWarning(warnings.join(' '))
+      if (unmatched.length > 0 || warnings.length > 0) setShowUnmatched(true)
+
       const uploadDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       setWarehouseUploadDate(uploadDate)
-      localStorage.setItem('selleriq_warehouse_qty', JSON.stringify(newQty))
+      localStorage.setItem('selleriq_warehouse_qty_v2', JSON.stringify(newQty))
+      localStorage.setItem('selleriq_warehouse_labels', JSON.stringify(newLabels))
       localStorage.setItem('selleriq_warehouse_upload_date', uploadDate)
     }
     reader.readAsText(file)
@@ -820,18 +889,38 @@ export default function Inventory() {
       return fbaSortDir === 'asc' ? av - bv : bv - av
     })
 
+  // ─── Active warehouses (single source of truth for build + render) ──
+  // A warehouse is active iff at least one SKU has qty > 0 for it. Derived,
+  // not stored, so re-uploads with fewer warehouses hide the empty ones.
+  const activeWarehouses: WarehouseConfig[] = WAREHOUSE_IDS
+    .map(id => {
+      const hasAnyQty = Object.values(warehouseQty).some(perSku => (perSku[id] ?? 0) > 0)
+      return { id, label: warehouseLabels[id] || `Warehouse ${id.slice(2)}`, active: hasAnyQty }
+    })
+    .filter(w => w.active)
+
   // ─── Supplier rows ────────────────────────────────────────
   const supplierRowsBySku: Record<string, SupplierReplenRow> = {}
   for (const r of inventory) {
     if (!r.sku) continue
-    const wh = warehouseQty[r.sku] || 0
+    const perWh = warehouseQty[r.sku] || {}
     const existing = supplierRowsBySku[r.sku]
     if (!existing) {
+      // warehouse totals are a per-SKU concept — computed once here, on the
+      // first marketplace pass, and never re-added on subsequent passes.
+      const warehouseQtys: Partial<Record<WarehouseId, number>> = {}
+      let warehouseTotal = 0
+      for (const w of activeWarehouses) {
+        const q = perWh[w.id] ?? 0
+        warehouseQtys[w.id] = q
+        warehouseTotal += q
+      }
       supplierRowsBySku[r.sku] = {
         sku: r.sku, title: r.title, asin: r.asin,
         total_fba: r.total_fba,
-        warehouse_qty: wh,
-        total_inventory: r.total_fba + wh,
+        warehouse_qtys: warehouseQtys,
+        warehouse_total: warehouseTotal,
+        total_inventory: r.total_fba + warehouseTotal,
         avg_daily_units: r.avg_daily_units,
         days_of_cover_total: null,
         units_to_order: 0,
@@ -839,9 +928,11 @@ export default function Inventory() {
         urgency: 'healthy',
       }
     } else {
+      // Subsequent marketplace pass for the same SKU: sum FBA + demand only.
+      // warehouse_total stays as set on the first pass (added once per SKU).
       existing.total_fba       += r.total_fba
-      existing.total_inventory  = existing.total_fba + existing.warehouse_qty
       existing.avg_daily_units += r.avg_daily_units
+      existing.total_inventory  = existing.total_fba + existing.warehouse_total
     }
   }
 
@@ -1236,19 +1327,30 @@ export default function Inventory() {
               </div>
 
               {/* Dialogs */}
-              {showUnmatched && unmatchedSkus.length > 0 && (
+              {showUnmatched && (unmatchedSkus.length > 0 || warehouseWarning) && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '400px', border: '1px solid var(--border)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                       <AlertTriangle size={15} color="#F97316" />
-                      <div style={{ fontSize: '15px', fontWeight: 600 }}>{unmatchedSkus.length} Unmatched SKU{unmatchedSkus.length > 1 ? 's' : ''}</div>
+                      <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                        {unmatchedSkus.length > 0
+                          ? `${unmatchedSkus.length} Unmatched SKU${unmatchedSkus.length > 1 ? 's' : ''}`
+                          : 'Import Notice'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px' }}>These SKUs were in your CSV but not found in SellerIQ.</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '20px' }}>
-                      {unmatchedSkus.map(sku => (
-                        <div key={sku} style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', padding: '4px 8px', background: 'var(--bg-hover)', borderRadius: '4px', color: '#F97316' }}>{sku}</div>
-                      ))}
-                    </div>
+                    {warehouseWarning && (
+                      <div style={{ fontSize: '13px', color: '#F97316', marginBottom: unmatchedSkus.length > 0 ? '14px' : '20px' }}>{warehouseWarning}</div>
+                    )}
+                    {unmatchedSkus.length > 0 && (
+                      <>
+                        <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px' }}>These SKUs were in your CSV but not found in SellerIQ.</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '20px', maxHeight: '240px', overflowY: 'auto' }}>
+                          {unmatchedSkus.map(sku => (
+                            <div key={sku} style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', padding: '4px 8px', background: 'var(--bg-hover)', borderRadius: '4px', color: '#F97316' }}>{sku}</div>
+                          ))}
+                        </div>
+                      </>
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                       <button onClick={() => setShowUnmatched(false)} style={{ padding: '7px 16px', borderRadius: '7px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Got it</button>
                     </div>
@@ -1284,8 +1386,8 @@ export default function Inventory() {
                 </div>
                 <UrgencyFilter counts={supUrgencyCounts} current={supFilter} onChange={setSupFilter} />
                 <button onClick={() => exportCSV(
-                  ['SKU', 'Title', 'Total FBA (US+CA)', 'Warehouse', 'Total Inv', 'Avg Daily Units', 'Days Cover', 'Units to Order', 'Reorder By', 'Urgency'],
-                  supplierRows.map(r => [r.sku, r.title, r.total_fba, r.warehouse_qty, r.total_inventory, r.avg_daily_units, r.days_of_cover_total ?? '', r.units_to_order, r.reorder_by ?? '', r.urgency]),
+                  ['SKU', 'Title', 'Total FBA (US+CA)', ...activeWarehouses.map(w => w.label), 'Warehouse Total', 'Total Inv', 'Avg Daily Units', 'Days Cover', 'Units to Order', 'Reorder By', 'Urgency'],
+                  supplierRows.map(r => [r.sku, r.title, r.total_fba, ...activeWarehouses.map(w => r.warehouse_qtys[w.id] ?? 0), r.warehouse_total, r.total_inventory, r.avg_daily_units, r.days_of_cover_total ?? '', r.units_to_order, r.reorder_by ?? '', r.urgency]),
                   'selleriq-supplier-reorder.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
                   <Download size={12} /> Export
@@ -1303,7 +1405,9 @@ export default function Inventory() {
                         <th style={{ ...thSortable(supSortKey === 'total_fba'), textAlign: 'right' }} onClick={() => handleSupSort('total_fba')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>FBA Inv <SortIcon col="total_fba" cur={supSortKey} dir={supSortDir} /></span>
                         </th>
-                        <th style={{ ...thBase, textAlign: 'right', color: '#A78BFA' }}>Warehouse</th>
+                        {activeWarehouses.map(w => (
+                          <th key={w.id} style={{ ...thBase, textAlign: 'right', color: '#A78BFA' }}>{w.label}</th>
+                        ))}
                         <th style={{ ...thBase, textAlign: 'right', fontWeight: 700 }}>Total Inv</th>
                         <th style={{ ...thSortable(supSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSupSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={supSortKey} dir={supSortDir} /></span>
@@ -1342,7 +1446,10 @@ export default function Inventory() {
                                 <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: uc.bg, color: uc.color }}>{uc.label}</span>
                               </td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>{fmt(row.total_fba)}</td>
-                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.warehouse_qty > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{row.warehouse_qty > 0 ? fmt(row.warehouse_qty) : '—'}</td>
+                              {activeWarehouses.map(w => {
+                                const q = row.warehouse_qtys[w.id] ?? 0
+                                return <td key={w.id} style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: q > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{q > 0 ? fmt(q) : '—'}</td>
+                              })}
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
@@ -1368,7 +1475,7 @@ export default function Inventory() {
                             </tr>
                             {isExpanded && (
                               <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                <td colSpan={10} style={{ padding: 0, background: 'var(--accent-light)' }}>
+                                <td colSpan={9 + activeWarehouses.length} style={{ padding: 0, background: 'var(--accent-light)' }}>
                                   <ForecastPanel
                                     startInventory={row.total_inventory}
                                     avgDailyUnits={row.avg_daily_units}
@@ -1381,7 +1488,13 @@ export default function Inventory() {
                                     statsLeft={[
                                       { label: 'Total Inventory', value: fmt(row.total_inventory) },
                                       { label: 'FBA', value: fmt(row.total_fba) },
-                                      { label: 'Warehouse', value: row.warehouse_qty > 0 ? fmt(row.warehouse_qty) : '—', color: '#A78BFA' },
+                                      ...(activeWarehouses.length > 0
+                                        ? [{ label: 'Warehouse Total', value: fmt(row.warehouse_total), color: '#A78BFA' }]
+                                        : []),
+                                      // Per-warehouse breakdown only when there's more than one (otherwise it just repeats the total).
+                                      ...(activeWarehouses.length >= 2
+                                        ? activeWarehouses.map(w => ({ label: w.label, value: fmt(row.warehouse_qtys[w.id] ?? 0), color: '#A78BFA' }))
+                                        : []),
                                     ]}
                                     statsRight={[
                                       { label: 'Avg/Day', value: row.avg_daily_units.toFixed(1) },
