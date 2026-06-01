@@ -42,6 +42,10 @@ function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
   return n.toLocaleString()
 }
+// Exact integer with comma separators — for unit counts (e.g. 11,807).
+function fmtUnits(n: number) {
+  return Math.round(n).toLocaleString('en-US')
+}
 function fmtCurrency(n: number) {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
@@ -302,7 +306,7 @@ export default function SalesOverview() {
 
   const cards = [
     { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} prior period` : 'No prior period', trend: trend(totalRevenue, prevRevenue), icon: <DollarSign size={14} />, color: 'var(--accent)' },
-    { label: `Units Ordered (${rangeLabel})`, value: fmt(totalUnits), sub: prevUnits > 0 ? `${fmt(prevUnits)} prior period` : 'No prior period', trend: trend(totalUnits, prevUnits), icon: <ShoppingCart size={14} />, color: 'var(--green)' },
+    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: prevUnits > 0 ? `${fmtUnits(prevUnits)} prior period` : 'No prior period', trend: trend(totalUnits, prevUnits), icon: <ShoppingCart size={14} />, color: 'var(--green)' },
     { label: `Sessions (${rangeLabel})`, value: fmt(totalSessions), sub: prevSessions > 0 ? `${fmt(prevSessions)} prior period` : 'No prior period', trend: trend(totalSessions, prevSessions), icon: <Eye size={14} />, color: 'var(--yellow)' },
     { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: prevAsp > 0 ? `${fmtASP(prevAsp)} prior period` : 'No prior period', trend: trend(asp, prevAsp), icon: <BarChart2 size={14} />, color: '#6366F1' },
     { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% prior period` : 'No prior period', trend: trend(convRate, prevConvRate), icon: <Percent size={14} />, color: '#EC4899' },
@@ -588,11 +592,11 @@ export default function SalesOverview() {
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace' }}>
-                        {topSortBy === 'revenue' ? fmtCurrency(p.revenue) : fmt(p.units) + ' units'}
+                        {topSortBy === 'revenue' ? fmtCurrency(p.revenue) : fmtUnits(p.units) + ' units'}
                       </div>
                       {topSortBy === 'revenue' && (
                         <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '1px' }}>
-                          {fmt(p.units)} units
+                          {fmtUnits(p.units)} units
                         </div>
                       )}
                     </div>

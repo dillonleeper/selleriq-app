@@ -53,6 +53,10 @@ function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
   return n.toLocaleString()
 }
+// Exact integer with comma separators — for unit counts (e.g. 11,807).
+function fmtUnits(n: number) {
+  return Math.round(n).toLocaleString('en-US')
+}
 function fmtCurrency(n: number) {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
@@ -526,7 +530,7 @@ export default function ProductPerformance() {
                             <Sparkline data={sparkData} positive={trend} />
                           </td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtCurrency(p.revenue)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmt(p.units)}</td>
+                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.units)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>${p.asp.toFixed(2)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmt(p.sessions)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{p.conv_rate.toFixed(1)}%</td>
@@ -552,7 +556,7 @@ export default function ProductPerformance() {
                                 <div style={{ display: 'flex', gap: '28px', marginBottom: '16px', flexWrap: 'wrap' }}>
                                   {[
                                     { label: 'Revenue',   value: fmtCurrency(p.revenue) },
-                                    { label: 'Units',     value: fmt(p.units) },
+                                    { label: 'Units',     value: fmtUnits(p.units) },
                                     { label: 'ASP',       value: '$' + p.asp.toFixed(2) },
                                     { label: 'Sessions',  value: fmt(p.sessions) },
                                     { label: 'Conv Rate', value: p.conv_rate.toFixed(1) + '%' },

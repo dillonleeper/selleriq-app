@@ -64,6 +64,10 @@ function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
   return n.toLocaleString()
 }
+// Exact integer with comma separators — for unit counts (e.g. 11,807).
+function fmtUnits(n: number) {
+  return Math.round(n).toLocaleString('en-US')
+}
 function toUSD(amount: number, marketplace: string) {
   return marketplace === 'CA' ? amount * CAD_TO_USD : amount
 }
@@ -536,7 +540,7 @@ export default function TrafficConversion() {
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{p.views_per_session.toFixed(2)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: p.buy_box_pct !== null && p.buy_box_pct < BUY_BOX_WARN ? 'var(--red)' : p.buy_box_pct !== null && p.buy_box_pct >= BUY_BOX_OK ? 'var(--green)' : 'var(--text-primary)' }}>{p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—'}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: p.conv_rate < LOW_CONV_THRESHOLD ? 'var(--red)' : p.conv_rate >= HEALTHY_CONV_THRESHOLD ? 'var(--green)' : 'var(--text-primary)' }}>{p.conv_rate.toFixed(1)}%</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmt(p.units)}</td>
+                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.units)}</td>
                           <td style={{ padding: '11px 12px', textAlign: 'right' }}>
                             {p.conv_change !== null ? (
                               <span style={{ fontSize: '11px', fontWeight: 600, color: p.conv_change > 0 ? 'var(--green)' : p.conv_change < 0 ? 'var(--red)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '2px', fontFamily: 'JetBrains Mono, monospace' }}>
@@ -574,7 +578,7 @@ export default function TrafficConversion() {
                                     { label: 'Views/Session', value: p.views_per_session.toFixed(2) },
                                     { label: 'Buy Box', value: p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—' },
                                     { label: 'Conv Rate', value: p.conv_rate.toFixed(1) + '%' },
-                                    { label: 'Units', value: fmt(p.units) },
+                                    { label: 'Units', value: fmtUnits(p.units) },
                                     ...(p.conv_change !== null ? [{ label: 'Δ Conv', value: (p.conv_change > 0 ? '+' : '') + p.conv_change.toFixed(2) + 'pp', color: p.conv_change > 0 ? 'var(--green)' : 'var(--red)' }] : []),
                                   ].map((stat, idx) => (
                                     <div key={idx}>
