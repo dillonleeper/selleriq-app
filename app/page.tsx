@@ -52,6 +52,35 @@ function toUSD(amount: number, marketplace: string) {
 function fmtDateLabel(iso: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+// Short axis label, e.g. "Jun 1" / "Jan 8".
+function shortLabel(iso: string) {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+// Sunday-start week key (YYYY-MM-DD) for the week containing dateStr.
+function weekStartKey(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() - d.getDay()) // getDay: Sun=0
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+type Granularity = 'day' | 'week'
+
+// Chart bucketing per the selected preset. Short ranges → daily points;
+// long ranges (YTD, custom > 31 days) → weekly buckets.
+function granularityFor(dr: DateRange): Granularity {
+  if (dr.preset === 'ytd') return 'week'
+  if (dr.preset === 'custom') {
+    const days = Math.round(
+      (new Date(dr.endDate + 'T12:00:00').getTime() - new Date(dr.startDate + 'T12:00:00').getTime())
+      / 86400000
+    ) + 1
+    return days > 31 ? 'week' : 'day'
+  }
+  return 'day' // today, yesterday, wtd, mtd
+}
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
@@ -74,6 +103,7 @@ export default function SalesOverview() {
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [weeklyData, setWeeklyData] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
+  const [granularity, setGranularity] = useState<Granularity>('day')
   const [productStats, setProductStats] = useState<ProductStat[]>([])
   const [loading, setLoading] = useState(true)
   const [topSortBy, setTopSortBy] = useState<'revenue' | 'units'>('revenue')
@@ -185,27 +215,30 @@ export default function SalesOverview() {
       const { data: pd } = await prevQuery
       const prevRows: any[] = pd || []
 
+      const gran = granularityFor(dateRange!)
+
       const aggregate = (rows: any[]): WeeklyRow[] => {
-        const byWeek: Record<string, WeeklyRow> = {}
+        const buckets: Record<string, WeeklyRow> = {}
         for (const row of rows) {
-          const key = row.start_date
-          if (!byWeek[key]) {
-            byWeek[key] = {
+          const key = gran === 'week' ? weekStartKey(row.start_date) : row.start_date
+          if (!buckets[key]) {
+            buckets[key] = {
               raw_date: key,
-              start_date: new Date(key + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+              start_date: shortLabel(key),
               total_revenue: 0, total_units: 0, total_sessions: 0, total_page_views: 0,
             }
           }
-          byWeek[key].total_revenue += toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
-          byWeek[key].total_units += row.units_ordered || 0
-          byWeek[key].total_sessions += row.sessions || 0
-          byWeek[key].total_page_views += row.page_views || 0
+          buckets[key].total_revenue += toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
+          buckets[key].total_units += row.units_ordered || 0
+          buckets[key].total_sessions += row.sessions || 0
+          buckets[key].total_page_views += row.page_views || 0
         }
-        return Object.values(byWeek)
+        return Object.values(buckets)
           .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
           .map(w => ({ ...w, total_revenue: Math.round(w.total_revenue) }))
       }
 
+      setGranularity(gran)
       setWeeklyData(aggregate(data || []))
       setPrevData(aggregate(prevRows))
 
@@ -470,7 +503,7 @@ export default function SalesOverview() {
           <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
             <div style={{ marginBottom: '18px' }}>
               <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>
-                Weekly Revenue
+                {granularity === 'week' ? 'Weekly' : 'Daily'} Revenue
                 {selectedProducts.length > 0 && (
                   <span style={{ fontSize: '11px', color: 'var(--accent)', marginLeft: '8px' }}>
                     {selectedProducts.length} product{selectedProducts.length > 1 ? 's' : ''} selected
@@ -501,7 +534,7 @@ export default function SalesOverview() {
           {/* Units Chart */}
           <div className="card" style={{ padding: '24px', marginBottom: '20px' }}>
             <div style={{ marginBottom: '18px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Weekly Units Ordered</div>
+              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>{granularity === 'week' ? 'Weekly' : 'Daily'} Units Ordered</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>All selected marketplaces combined</div>
             </div>
             <ResponsiveContainer width="100%" height={180}>
