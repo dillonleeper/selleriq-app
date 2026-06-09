@@ -1,12 +1,12 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
   ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download, Upload,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, X,
 } from 'lucide-react'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -522,7 +522,6 @@ export default function Inventory() {
   const [tab, setTab]                 = useState<TabType>('inventory')
   const [inventory, setInventory]     = useState<InventoryRow[]>([])
   const [loading, setLoading]         = useState(true)
-  const [search, setSearch]           = useState('')
   const [sortKey, setSortKey]         = useState<SortKey>('avg_daily_units')
   const [sortDir, setSortDir]         = useState<SortDir>('desc')
   const [fbaSortKey, setFbaSortKey]   = useState<FbaSortKey>('units_to_send')
@@ -536,6 +535,80 @@ export default function Inventory() {
   const [salesHistoryBySkuOnly, setSalesHistoryBySkuOnly] = useState<Record<string, SalesHistoryPoint[]>>({})
   const [expandedFbaSku, setExpandedFbaSku]   = useState<string | null>(null)
   const [expandedSupSku, setExpandedSupSku]   = useState<string | null>(null)
+
+  // Search state — checkbox multi-select (same pattern as Sales Overview)
+  const [searchQuery, setSearchQuery]       = useState('')
+  const [searchResults, setSearchResults]   = useState<any[]>([])
+  const [selectedProducts, setSelectedProducts] = useState<any[]>([])
+  const [showDropdown, setShowDropdown]     = useState(false)
+  const searchRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setShowDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  useEffect(() => {
+    if (searchQuery.length < 2) { setSearchResults([]); setShowDropdown(false); return }
+    const timer = setTimeout(async () => {
+      const q = searchQuery.toLowerCase()
+      const { data } = await supabase
+        .from('dim_product').select('sku, asin, title')
+        .or(`sku.ilike.%${q}%,asin.ilike.%${q}%,title.ilike.%${q}%`).limit(20)
+      if (data) {
+        const seen = new Set<string>()
+        setSearchResults(data.filter(p => { if (!p.sku || seen.has(p.sku)) return false; seen.add(p.sku); return true }))
+        setShowDropdown(true)
+      }
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
+  const allChecked = searchResults.length > 0 && searchResults.every(p => selectedProducts.find(s => s.sku === p.sku))
+  const someChecked = searchResults.some(p => selectedProducts.find(s => s.sku === p.sku))
+
+  const toggleProduct = (p: any) => {
+    if (selectedProducts.find(s => s.sku === p.sku)) {
+      setSelectedProducts(prev => prev.filter(s => s.sku !== p.sku))
+    } else {
+      setSelectedProducts(prev => [...prev, p])
+    }
+  }
+
+  const toggleAll = () => {
+    if (allChecked) {
+      const resultSkus = new Set(searchResults.map((p: any) => p.sku))
+      setSelectedProducts(prev => prev.filter(p => !resultSkus.has(p.sku)))
+    } else {
+      const toAdd = searchResults.filter(p => !selectedProducts.find(s => s.sku === p.sku))
+      setSelectedProducts(prev => [...prev, ...toAdd])
+    }
+  }
+
+  const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && searchQuery.length >= 2) {
+      const q = searchQuery.toLowerCase()
+      const { data } = await supabase
+        .from('dim_product').select('sku, asin, title')
+        .or(`sku.ilike.%${q}%,asin.ilike.%${q}%,title.ilike.%${q}%`).limit(500)
+      if (data) {
+        const seen = new Set<string>()
+        const unique = data.filter(p => { if (!p.sku || seen.has(p.sku)) return false; seen.add(p.sku); return true })
+        const toAdd = unique.filter(p => !selectedProducts.find(s => s.sku === p.sku))
+        setSelectedProducts(prev => [...prev, ...toAdd])
+      }
+      setSearchQuery(''); setShowDropdown(false)
+    }
+    if (e.key === 'Escape') setShowDropdown(false)
+  }
+
+  const removeProduct = (sku: string) => setSelectedProducts(prev => prev.filter(p => p.sku !== sku))
+  const clearAll = () => setSelectedProducts([])
 
   // ── Replenishment settings ──
   const [fbaTarget, setFbaTarget]     = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_fba_target') || FBA_TARGET_DEFAULT) : FBA_TARGET_DEFAULT)
@@ -838,10 +911,7 @@ export default function Inventory() {
   // ─── Filtered inventory ───────────────────────────────────
   const filtered = inventory
     .filter(r => {
-      if (search) {
-        const q = search.toLowerCase()
-        return r.sku.toLowerCase().includes(q) || r.title.toLowerCase().includes(q) || r.asin.toLowerCase().includes(q)
-      }
+      if (selectedProducts.length > 0 && !selectedProducts.some(s => s.sku === r.sku)) return false
       return true
     })
     .sort((a, b) => {
@@ -876,10 +946,7 @@ export default function Inventory() {
     .filter(r => r.urgency !== 'healthy' || r.units_to_send > 0)
     .filter(r => {
       if (fbaFilter !== 'all' && r.urgency !== fbaFilter) return false
-      if (search) {
-        const q = search.toLowerCase()
-        return r.sku.toLowerCase().includes(q) || r.title.toLowerCase().includes(q)
-      }
+      if (selectedProducts.length > 0 && !selectedProducts.some(s => s.sku === r.sku)) return false
       return true
     })
     .sort((a, b) => {
@@ -954,10 +1021,7 @@ export default function Inventory() {
     })
     .filter(r => {
       if (supFilter !== 'all' && r.urgency !== supFilter) return false
-      if (search) {
-        const q = search.toLowerCase()
-        return r.sku.toLowerCase().includes(q) || r.title.toLowerCase().includes(q)
-      }
+      if (selectedProducts.length > 0 && !selectedProducts.some(s => s.sku === r.sku)) return false
       return true
     })
     .sort((a, b) => {
@@ -1049,11 +1113,65 @@ export default function Inventory() {
           {tab === 'inventory' && (
             <>
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
+              <div ref={searchRef} style={{ position: 'relative', flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
                   <Search size={13} color="var(--text-muted)" />
-                  <input type="text" placeholder="Filter by SKU, ASIN, or product name..." value={search} onChange={e => setSearch(e.target.value)}
+                  <input type="text" placeholder="Search by SKU, ASIN, or product name — press Enter to add all results"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    onFocus={() => searchQuery.length >= 2 && setShowDropdown(true)}
+                    onKeyDown={handleSearchKeyDown}
                     style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  {selectedProducts.length > 0 && (
+                    <button onClick={clearAll} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                      <X size={11} /> Clear all
+                    </button>
+                  )}
                 </div>
+                {showDropdown && searchResults.length > 0 && (
+                  <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '10px', zIndex: 200, overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
+                    <div onClick={toggleAll} style={{ padding: '9px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-hover)' }}
+                      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--border)'}
+                      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}>
+                      <div style={{ width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0, border: `1px solid ${allChecked || someChecked ? 'var(--accent)' : 'var(--border)'}`, background: allChecked ? 'var(--accent)' : someChecked ? 'var(--accent-light)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {(allChecked || someChecked) && <div style={{ width: '6px', height: '2px', background: allChecked ? 'white' : 'var(--accent)', borderRadius: '1px' }} />}
+                      </div>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>{allChecked ? 'Deselect all' : `Select all ${searchResults.length} results`}</span>
+                    </div>
+                    {searchResults.map((p: any, i: number) => {
+                      const isSelected = !!selectedProducts.find(s => s.sku === p.sku)
+                      return (
+                        <div key={i} onClick={() => toggleProduct(p)} style={{ padding: '10px 14px', borderBottom: i < searchResults.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: isSelected ? 'var(--accent-light)' : 'transparent', transition: 'background 0.1s ease' }}
+                          onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = isSelected ? 'var(--accent-light)' : 'transparent' }}>
+                          <div style={{ width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0, border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`, background: isSelected ? 'var(--accent)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.12s ease' }}>
+                            {isSelected && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '2px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title ? truncate(p.title, 60) : p.sku}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{p.sku} · {p.asin}</div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                {selectedProducts.length > 0 && (
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px', alignItems: 'center' }}>
+                    {selectedProducts.length <= 3 ? selectedProducts.map(p => (
+                      <div key={p.sku} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--accent)' }}>
+                        <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{p.sku}</span>
+                        <button onClick={() => removeProduct(p.sku)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', display: 'flex', padding: 0 }}><X size={10} /></button>
+                      </div>
+                    )) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '6px', padding: '5px 12px', fontSize: '12px', color: 'var(--accent)' }}>
+                        <span style={{ fontWeight: 500 }}>{selectedProducts.length} products selected</span>
+                        <button onClick={clearAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', padding: 0 }}><X size={10} /> Clear all</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
                 <button onClick={() => exportCSV(
                   ['SKU', 'ASIN', 'Marketplace', 'Status', 'Fulfillable', 'Available', 'Reserved', 'Inbound', 'Total FBA', 'Unsellable', 'Avg Daily Units', 'Days Cover', 'Snapshot Date'],
                   filtered.map(r => [r.sku, r.asin, r.marketplace, r.status, r.fulfillable, r.available, r.reserved, r.inbound, r.total_fba, r.unsellable, r.avg_daily_units, r.days_of_cover ?? '', r.snapshot_date]),
@@ -1163,14 +1281,67 @@ export default function Inventory() {
               )}
 
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
-                  <Search size={13} color="var(--text-muted)" />
-                  <input type="text" placeholder="Filter by SKU or product name..." value={search} onChange={e => setSearch(e.target.value)}
-                    style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }} />
+                <div ref={searchRef} style={{ position: 'relative', flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
+                    <Search size={13} color="var(--text-muted)" />
+                    <input type="text" placeholder="Search by SKU, ASIN, or product name — press Enter to add all results"
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      onFocus={() => searchQuery.length >= 2 && setShowDropdown(true)}
+                      onKeyDown={handleSearchKeyDown}
+                      style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }} />
+                    {selectedProducts.length > 0 && (
+                      <button onClick={clearAll} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                        <X size={11} /> Clear all
+                      </button>
+                    )}
+                  </div>
+                  {showDropdown && searchResults.length > 0 && (
+                    <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '10px', zIndex: 200, overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
+                      <div onClick={toggleAll} style={{ padding: '9px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-hover)' }}
+                        onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--border)'}
+                        onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}>
+                        <div style={{ width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0, border: `1px solid ${allChecked || someChecked ? 'var(--accent)' : 'var(--border)'}`, background: allChecked ? 'var(--accent)' : someChecked ? 'var(--accent-light)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {(allChecked || someChecked) && <div style={{ width: '6px', height: '2px', background: allChecked ? 'white' : 'var(--accent)', borderRadius: '1px' }} />}
+                        </div>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>{allChecked ? 'Deselect all' : `Select all ${searchResults.length} results`}</span>
+                      </div>
+                      {searchResults.map((p: any, i: number) => {
+                        const isSelected = !!selectedProducts.find(s => s.sku === p.sku)
+                        return (
+                          <div key={i} onClick={() => toggleProduct(p)} style={{ padding: '10px 14px', borderBottom: i < searchResults.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: isSelected ? 'var(--accent-light)' : 'transparent', transition: 'background 0.1s ease' }}
+                            onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = isSelected ? 'var(--accent-light)' : 'transparent' }}>
+                            <div style={{ width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0, border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`, background: isSelected ? 'var(--accent)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.12s ease' }}>
+                              {isSelected && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '2px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title ? truncate(p.title, 60) : p.sku}</div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{p.sku} · {p.asin}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {selectedProducts.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px', alignItems: 'center' }}>
+                      {selectedProducts.length <= 3 ? selectedProducts.map(p => (
+                        <div key={p.sku} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--accent)' }}>
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{p.sku}</span>
+                          <button onClick={() => removeProduct(p.sku)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', display: 'flex', padding: 0 }}><X size={10} /></button>
+                        </div>
+                      )) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '6px', padding: '5px 12px', fontSize: '12px', color: 'var(--accent)' }}>
+                          <span style={{ fontWeight: 500 }}>{selectedProducts.length} products selected</span>
+                          <button onClick={clearAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', padding: 0 }}><X size={10} /> Clear all</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <UrgencyFilter counts={fbaUrgencyCounts} current={fbaFilter} onChange={setFbaFilter} />
                 <button onClick={() => exportCSV(
-                  ['SKU', 'Title', 'Marketplace', 'Fulfillable', 'Inbound', 'Reserved', 'Total FBA', 'Avg Daily Units', 'Days Cover', 'Units to Send', 'Urgency'],
                   fbaRows.map(r => [r.sku, r.title, r.marketplace, r.fulfillable, r.inbound, r.reserved, r.total_inventory, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
                   'selleriq-fba-replenishment.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
@@ -1379,14 +1550,67 @@ export default function Inventory() {
 
               {/* Search + Filter + Export */}
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
-                  <Search size={13} color="var(--text-muted)" />
-                  <input type="text" placeholder="Filter by SKU or product name..." value={search} onChange={e => setSearch(e.target.value)}
-                    style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }} />
+                <div ref={searchRef} style={{ position: 'relative', flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px' }}>
+                    <Search size={13} color="var(--text-muted)" />
+                    <input type="text" placeholder="Search by SKU, ASIN, or product name — press Enter to add all results"
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      onFocus={() => searchQuery.length >= 2 && setShowDropdown(true)}
+                      onKeyDown={handleSearchKeyDown}
+                      style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }} />
+                    {selectedProducts.length > 0 && (
+                      <button onClick={clearAll} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                        <X size={11} /> Clear all
+                      </button>
+                    )}
+                  </div>
+                  {showDropdown && searchResults.length > 0 && (
+                    <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '10px', zIndex: 200, overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
+                      <div onClick={toggleAll} style={{ padding: '9px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-hover)' }}
+                        onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--border)'}
+                        onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}>
+                        <div style={{ width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0, border: `1px solid ${allChecked || someChecked ? 'var(--accent)' : 'var(--border)'}`, background: allChecked ? 'var(--accent)' : someChecked ? 'var(--accent-light)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {(allChecked || someChecked) && <div style={{ width: '6px', height: '2px', background: allChecked ? 'white' : 'var(--accent)', borderRadius: '1px' }} />}
+                        </div>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>{allChecked ? 'Deselect all' : `Select all ${searchResults.length} results`}</span>
+                      </div>
+                      {searchResults.map((p: any, i: number) => {
+                        const isSelected = !!selectedProducts.find(s => s.sku === p.sku)
+                        return (
+                          <div key={i} onClick={() => toggleProduct(p)} style={{ padding: '10px 14px', borderBottom: i < searchResults.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: isSelected ? 'var(--accent-light)' : 'transparent', transition: 'background 0.1s ease' }}
+                            onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = isSelected ? 'var(--accent-light)' : 'transparent' }}>
+                            <div style={{ width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0, border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`, background: isSelected ? 'var(--accent)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.12s ease' }}>
+                              {isSelected && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '2px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title ? truncate(p.title, 60) : p.sku}</div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{p.sku} · {p.asin}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {selectedProducts.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px', alignItems: 'center' }}>
+                      {selectedProducts.length <= 3 ? selectedProducts.map(p => (
+                        <div key={p.sku} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--accent)' }}>
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{p.sku}</span>
+                          <button onClick={() => removeProduct(p.sku)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', display: 'flex', padding: 0 }}><X size={10} /></button>
+                        </div>
+                      )) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '6px', padding: '5px 12px', fontSize: '12px', color: 'var(--accent)' }}>
+                          <span style={{ fontWeight: 500 }}>{selectedProducts.length} products selected</span>
+                          <button onClick={clearAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', padding: 0 }}><X size={10} /> Clear all</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <UrgencyFilter counts={supUrgencyCounts} current={supFilter} onChange={setSupFilter} />
                 <button onClick={() => exportCSV(
-                  ['SKU', 'Title', 'Total FBA (US+CA)', ...activeWarehouses.map(w => w.label), 'Warehouse Total', 'Total Inv', 'Avg Daily Units', 'Days Cover', 'Units to Order', 'Reorder By', 'Urgency'],
                   supplierRows.map(r => [r.sku, r.title, r.total_fba, ...activeWarehouses.map(w => r.warehouse_qtys[w.id] ?? 0), r.warehouse_total, r.total_inventory, r.avg_daily_units, r.days_of_cover_total ?? '', r.units_to_order, r.reorder_by ?? '', r.urgency]),
                   'selleriq-supplier-reorder.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
