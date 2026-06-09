@@ -1342,8 +1342,9 @@ export default function Inventory() {
                 </div>
                 <UrgencyFilter counts={fbaUrgencyCounts} current={fbaFilter} onChange={setFbaFilter} />
                 <button onClick={() => exportCSV(
-                  fbaRows.map(r => [r.sku, r.title, r.marketplace, r.fulfillable, r.inbound, r.reserved, r.total_inventory, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
-                  'selleriq-fba-replenishment.csv'
+  		  ['SKU', 'Title', 'Marketplace', 'Fulfillable', 'Inbound', 'Reserved', 'Total FBA', 'Avg Daily Units', 'Days Cover', 'Units to Send', 'Urgency'],
+  		  fbaRows.map(r => [r.sku, r.title, r.marketplace, r.fulfillable, r.inbound, r.reserved, r.total_inventory, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
+  		  'selleriq-fba-replenishment.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
                   <Download size={12} /> Export
                 </button>
