@@ -16,7 +16,7 @@ import {
 const CAD_TO_USD = 0.74
 
 const PRESET_LABELS: Record<DatePreset, string> = {
-  '4w': 'Last 4 Weeks', '8w': 'Last 8 Weeks', '13w': 'Last 13 Weeks', ytd: 'YTD', all: 'All',
+  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
 }
 
 type WeeklyRow = {
@@ -75,9 +75,15 @@ type Granularity = 'day' | 'week'
 // Chart bucketing per the selected preset. Short ranges → daily points;
 // long ranges (YTD, custom > 31 days) → weekly buckets.
 function granularityFor(dr: DateRange): Granularity {
-  if (dr.preset === 'ytd' || dr.preset === 'all' || dr.preset === '13w') return 'week'
-  if (dr.preset === '8w') return 'week'
-  return 'day' // 4w shows daily bars
+  if (dr.preset === 'ytd') return 'week'
+  if (dr.preset === 'custom') {
+    // Long custom windows (> 31 days) get weekly buckets; shorter ones stay daily.
+    const start = new Date(dr.startDate + 'T12:00:00')
+    const end = new Date(dr.endDate + 'T12:00:00')
+    const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1
+    return days > 31 ? 'week' : 'day'
+  }
+  return 'day' // today / yesterday / wtd / mtd → daily
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
