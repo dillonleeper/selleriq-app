@@ -1,17 +1,12 @@
 'use client'
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { Calendar } from 'lucide-react'
 
 // ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
-export type DatePreset = 'today' | 'yesterday' | 'wtd' | 'mtd' | 'ytd' | 'custom'
+export type DatePreset = '4w' | '8w' | '13w' | 'ytd' | 'all'
 
-// All dates are YYYY-MM-DD strings, ready for Supabase
-// .gte('start_date', startDate).lte('start_date', endDate).
-// For a 'custom' preset with no start date chosen yet, every field is ''
-// so the parent can skip its query until the user finishes picking.
 export type DateRange = {
   preset: DatePreset
   startDate: string
@@ -26,20 +21,16 @@ type Props = {
 }
 
 const PRESETS: { key: DatePreset; label: string }[] = [
-  { key: 'today',     label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: 'wtd',       label: 'WTD' },
-  { key: 'mtd',       label: 'MTD' },
-  { key: 'ytd',       label: 'YTD' },
-  { key: 'custom',    label: 'Custom' },
+  { key: '4w',  label: '4W' },
+  { key: '8w',  label: '8W' },
+  { key: '13w', label: '13W' },
+  { key: 'ytd', label: 'YTD' },
+  { key: 'all', label: 'ALL' },
 ]
 
 // ─────────────────────────────────────────────────────────────
-// Date helpers — all local-time based
+// Date helpers
 // ─────────────────────────────────────────────────────────────
-
-// Local date → 'YYYY-MM-DD'. Built from local components rather than
-// toISOString() so the day never shifts under a negative UTC offset.
 function toISO(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -53,89 +44,70 @@ function addDays(d: Date, n: number): Date {
   return r
 }
 
-// Last calendar day of a month. monthIndex is 0-11; day 0 of the next
-// month resolves to the last day of this one.
-function daysInMonth(year: number, monthIndex: number): number {
-  return new Date(year, monthIndex + 1, 0).getDate()
-}
-
-// Inclusive day count between two YYYY-MM-DD strings (start & end both count).
-function spanDays(startISO: string, endISO: string): number {
-  const s = new Date(startISO + 'T12:00:00')
-  const e = new Date(endISO + 'T12:00:00')
-  return Math.round((e.getTime() - s.getTime()) / 86400000) + 1
-}
-
-// ─────────────────────────────────────────────────────────────
-// Window computation — current + prior period for each preset
-// ─────────────────────────────────────────────────────────────
-export function computeRange(preset: DatePreset, customStart: string, customEnd: string): DateRange {
+// Most recently completed Saturday (end of week).
+// If today is Sunday, the most recently completed week ended yesterday.
+function mostRecentCompletedSaturday(): Date {
   const today = new Date()
-  today.setHours(12, 0, 0, 0) // noon anchor avoids DST edge cases
+  today.setHours(12, 0, 0, 0)
+  // getDay: Sun=0, Mon=1, ..., Sat=6
+  // Days since last Saturday: if today is Sun(0) → 1, Mon(1) → 2, ..., Sat(6) → 0
+  const daysSinceSat = today.getDay() === 0 ? 1 : 7 - today.getDay()
+  // Actually: we want the last COMPLETED week, so Saturday of last week
+  // Sun=0 → last Sat = yesterday (-1)
+  // Mon=1 → last Sat = -2
+  // ...
+  // Sat=6 → last Sat = -7 (the previous Saturday, since this week isn't done)
+  const offset = today.getDay() === 6 ? -7 : -(today.getDay() + 1)
+  return addDays(today, offset)
+}
 
-  const make = (start: Date, end: Date, pStart: Date, pEnd: Date): DateRange => ({
-    preset,
-    startDate: toISO(start), endDate: toISO(end),
-    priorStart: toISO(pStart), priorEnd: toISO(pEnd),
+// Sunday that starts the week containing the given Saturday.
+function sundayOf(saturday: Date): Date {
+  return addDays(saturday, -6)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Range computation — always anchored to completed weeks
+// ─────────────────────────────────────────────────────────────
+export function computeRange(preset: DatePreset): DateRange {
+  const lastSat = mostRecentCompletedSaturday()
+  const lastSun = sundayOf(lastSat)
+
+  const make = (startDate: string, endDate: string, priorStart: string, priorEnd: string): DateRange => ({
+    preset, startDate, endDate, priorStart, priorEnd,
   })
 
   switch (preset) {
-    case 'today': {
-      // prior = yesterday
-      const y = addDays(today, -1)
-      return make(today, today, y, y)
+    case '4w': {
+      // Current: last 4 completed weeks (28 days ending on lastSat)
+      const start = addDays(lastSun, -21) // 4 weeks back from lastSun
+      const priorEnd = addDays(start, -1)
+      const priorStart = addDays(priorEnd, -27)
+      return make(toISO(start), toISO(lastSat), toISO(priorStart), toISO(priorEnd))
     }
-
-    case 'yesterday': {
-      // prior = day before yesterday
-      const y = addDays(today, -1)
-      const dby = addDays(today, -2)
-      return make(y, y, dby, dby)
+    case '8w': {
+      const start = addDays(lastSun, -49) // 8 weeks back
+      const priorEnd = addDays(start, -1)
+      const priorStart = addDays(priorEnd, -55)
+      return make(toISO(start), toISO(lastSat), toISO(priorStart), toISO(priorEnd))
     }
-
-    case 'wtd': {
-      // start = most recent Sunday (today if today is Sunday). getDay: Sun=0.
-      const start = addDays(today, -today.getDay())
-      // prior = same span one week earlier (prior Sunday → same weekday)
-      return make(start, today, addDays(start, -7), addDays(today, -7))
+    case '13w': {
+      const start = addDays(lastSun, -84) // 13 weeks back
+      const priorEnd = addDays(start, -1)
+      const priorStart = addDays(priorEnd, -90)
+      return make(toISO(start), toISO(lastSat), toISO(priorStart), toISO(priorEnd))
     }
-
-    case 'mtd': {
-      const start = new Date(today.getFullYear(), today.getMonth(), 1, 12)
-      // prior = 1st of last month → same day-of-month last month (clamped)
-      const pm = new Date(today.getFullYear(), today.getMonth() - 1, 1, 12)
-      const pStart = new Date(pm.getFullYear(), pm.getMonth(), 1, 12)
-      const clampDay = Math.min(today.getDate(), daysInMonth(pm.getFullYear(), pm.getMonth()))
-      const pEnd = new Date(pm.getFullYear(), pm.getMonth(), clampDay, 12)
-      return make(start, today, pStart, pEnd)
-    }
-
     case 'ytd': {
-      const start = new Date(today.getFullYear(), 0, 1, 12)
-      // prior = Jan 1 last year → same month/day last year (clamped for Feb 29)
-      const pYear = today.getFullYear() - 1
-      const pStart = new Date(pYear, 0, 1, 12)
-      const clampDay = Math.min(today.getDate(), daysInMonth(pYear, today.getMonth()))
-      const pEnd = new Date(pYear, today.getMonth(), clampDay, 12)
-      return make(start, today, pStart, pEnd)
+      const today = new Date()
+      const yearStart = new Date(today.getFullYear(), 0, 1, 12)
+      // Prior: same period last year
+      const priorYearStart = new Date(today.getFullYear() - 1, 0, 1, 12)
+      const priorYearEnd = new Date(today.getFullYear() - 1, lastSat.getMonth(), lastSat.getDate(), 12)
+      return make(toISO(yearStart), toISO(lastSat), toISO(priorYearStart), toISO(priorYearEnd))
     }
-
-    case 'custom': {
-      const startISO = customStart
-      const endISO = customEnd || toISO(today) // default end to today if blank
-      if (!startISO) {
-        // incomplete — signal "not ready" with empty strings
-        return { preset, startDate: '', endDate: '', priorStart: '', priorEnd: '' }
-      }
-      // prior = same-length window immediately before the selected start
-      const len = spanDays(startISO, endISO)
-      const start = new Date(startISO + 'T12:00:00')
-      const pEnd = addDays(start, -1)
-      const pStart = addDays(pEnd, -(len - 1))
-      return {
-        preset, startDate: startISO, endDate: endISO,
-        priorStart: toISO(pStart), priorEnd: toISO(pEnd),
-      }
+    case 'all': {
+      // All available data — use a far-back start date
+      return make('2020-01-01', toISO(lastSat), '2020-01-01', toISO(lastSat))
     }
   }
 }
@@ -143,35 +115,22 @@ export function computeRange(preset: DatePreset, customStart: string, customEnd:
 // ─────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────
-const inputStyle: React.CSSProperties = {
-  padding: '4px 8px', borderRadius: '6px', fontSize: '11px',
-  border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-  color: 'var(--text-primary)', cursor: 'pointer', outline: 'none',
-  fontFamily: 'JetBrains Mono, monospace',
-}
-
-export default function DateRangeFilter({ onChange, defaultPreset = 'mtd' }: Props) {
+export default function DateRangeFilter({ onChange, defaultPreset = 'ytd' }: Props) {
   const [preset, setPreset] = useState<DatePreset>(defaultPreset)
-  const [customStart, setCustomStart] = useState('')
-  const [customEnd, setCustomEnd] = useState('')
 
-  const range = useMemo(
-    () => computeRange(preset, customStart, customEnd),
-    [preset, customStart, customEnd]
-  )
+  const range = useMemo(() => computeRange(preset), [preset])
 
-  // Emit upward whenever the computed window changes. Depends on the
-  // primitive fields (not the object identity) to avoid spurious fires.
   useEffect(() => {
     onChange(range)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.preset, range.startDate, range.endDate, range.priorStart, range.priorEnd])
-
-  const today = toISO(new Date())
+  }, [range.preset, range.startDate, range.endDate])
 
   return (
-    <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
-      <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginRight: '4px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+      <span style={{
+        fontSize: '10px', color: 'var(--text-dim)', marginRight: '4px',
+        fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
+      }}>
         Range
       </span>
       {PRESETS.map(p => {
@@ -187,36 +146,13 @@ export default function DateRangeFilter({ onChange, defaultPreset = 'mtd' }: Pro
               color: active ? 'var(--accent)' : 'var(--text-muted)',
               fontSize: '11px', fontWeight: 500, cursor: 'pointer',
               transition: 'all 0.12s ease',
-              display: 'flex', alignItems: 'center', gap: '4px',
-              fontFamily: p.key === 'custom' ? 'inherit' : 'JetBrains Mono, monospace',
+              fontFamily: 'JetBrains Mono, monospace',
             }}
           >
-            {p.key === 'custom' && <Calendar size={10} />}
             {p.label}
           </button>
         )
       })}
-
-      {preset === 'custom' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '4px' }}>
-          <input
-            type="date"
-            value={customStart}
-            max={customEnd || today}
-            onChange={e => setCustomStart(e.target.value)}
-            style={inputStyle}
-          />
-          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>to</span>
-          <input
-            type="date"
-            value={customEnd}
-            min={customStart || undefined}
-            max={today}
-            onChange={e => setCustomEnd(e.target.value)}
-            style={inputStyle}
-          />
-        </div>
-      )}
     </div>
   )
 }
