@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
-import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter-weekly'
+import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, BarChart, Bar
