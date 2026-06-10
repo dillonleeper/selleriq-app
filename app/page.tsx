@@ -16,7 +16,7 @@ import {
 const CAD_TO_USD = 0.74
 
 const PRESET_LABELS: Record<DatePreset, string> = {
-  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
+  '4w': 'Last 4 Weeks', '8w': 'Last 8 Weeks', '13w': 'Last 13 Weeks', ytd: 'YTD', all: 'All',
 }
 
 type WeeklyRow = {
@@ -75,15 +75,9 @@ type Granularity = 'day' | 'week'
 // Chart bucketing per the selected preset. Short ranges → daily points;
 // long ranges (YTD, custom > 31 days) → weekly buckets.
 function granularityFor(dr: DateRange): Granularity {
-  if (dr.preset === 'ytd') return 'week'
-  if (dr.preset === 'custom') {
-    const days = Math.round(
-      (new Date(dr.endDate + 'T12:00:00').getTime() - new Date(dr.startDate + 'T12:00:00').getTime())
-      / 86400000
-    ) + 1
-    return days > 31 ? 'week' : 'day'
-  }
-  return 'day' // today, yesterday, wtd, mtd
+  if (dr.preset === 'ytd' || dr.preset === 'all' || dr.preset === '13w') return 'week'
+  if (dr.preset === '8w') return 'week'
+  return 'day' // 4w shows daily bars
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -221,7 +215,7 @@ export default function SalesOverview() {
 
       const gran = granularityFor(dateRange!)
 
-      const aggregate = (rows: any[]): WeeklyRow[] => {
+      const aggregate = (rows: any[], clipStart?: string): WeeklyRow[] => {
         const buckets: Record<string, WeeklyRow> = {}
         for (const row of rows) {
           const key = gran === 'week' ? weekStartKey(row.start_date) : row.start_date
@@ -239,12 +233,13 @@ export default function SalesOverview() {
         }
         return Object.values(buckets)
           .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
+          .filter(w => !clipStart || w.raw_date >= clipStart)
           .map(w => ({ ...w, total_revenue: Math.round(w.total_revenue) }))
       }
 
       setGranularity(gran)
-      setWeeklyData(aggregate(data || []))
-      setPrevData(aggregate(prevRows))
+      setWeeklyData(aggregate(data || [], startDate))
+      setPrevData(aggregate(prevRows, priorStart))
 
       // Build product stats for top sellers + gainers/losers
       const bySku: Record<string, { sku: string, title: string, revenue: number, units: number }> = {}
@@ -307,7 +302,6 @@ export default function SalesOverview() {
   // Preset-aware empty-state label for the prior-period comparison line.
   const noPriorLabel =
     dateRange?.preset === 'ytd' ? 'No prior year data'
-    : dateRange?.preset === 'mtd' ? 'No prior month data'
     : 'No prior period'
 
   const cards = [
@@ -338,7 +332,7 @@ export default function SalesOverview() {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-          <DateRangeFilter onChange={setDateRange} />
+          <DateRangeFilter onChange={setDateRange} defaultPreset="ytd" />
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
         </div>
       </div>
