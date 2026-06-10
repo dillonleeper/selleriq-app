@@ -21,7 +21,7 @@ import {
 const CAD_TO_USD = 0.74
 
 const PRESET_LABELS: Record<DatePreset, string> = {
-  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
+  '4w': 'Last 4 Weeks', '8w': 'Last 8 Weeks', '13w': 'Last 13 Weeks', ytd: 'YTD', all: 'All',
 }
 
 // Health classification thresholds. Tweak these once you have a feel

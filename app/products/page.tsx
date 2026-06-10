@@ -16,7 +16,7 @@ import {
 const CAD_TO_USD = 0.74
 
 const PRESET_LABELS: Record<DatePreset, string> = {
-  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
+  '4w': 'Last 4 Weeks', '8w': 'Last 8 Weeks', '13w': 'Last 13 Weeks', ytd: 'YTD', all: 'All',
 }
 
 type CadenceGrouping = 'day' | 'week' | 'month'
@@ -641,11 +641,7 @@ export default function ProductPerformance() {
         )}
       </div>
 
-      {dateRange?.preset === 'custom' && !dateRange.startDate ? (
-        <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>
-          Select a start date above to load data
-        </div>
-      ) : loading ? (
+      {loading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
       ) : tab === 'summary' ? (
 
