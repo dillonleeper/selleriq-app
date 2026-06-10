@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
-import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
+import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter-weekly'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, BarChart, Bar
@@ -301,7 +301,6 @@ export default function SalesOverview() {
   // Preset-aware empty-state label for the prior-period comparison line.
   const noPriorLabel =
     dateRange?.preset === 'ytd' ? 'No prior year data'
-    : dateRange?.preset === 'mtd' ? 'No prior month data'
     : 'No prior period'
 
   const cards = [
