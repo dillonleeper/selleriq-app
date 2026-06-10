@@ -13,8 +13,6 @@ import {
   Minus, ArrowUpDown, ArrowUp, ArrowDown, Search, Download, X
 } from 'lucide-react'
 
-const CAD_TO_USD = 0.74
-
 const PRESET_LABELS: Record<DatePreset, string> = {
   today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
 }
@@ -59,9 +57,6 @@ function fmtUnits(n: number) {
 }
 function fmtCurrency(n: number) {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
-}
-function toUSD(amount: number, marketplace: string) {
-  return marketplace === 'CA' ? amount * CAD_TO_USD : amount
 }
 function truncate(s: string, n: number) {
   return s && s.length > n ? s.slice(0, n) + '…' : s
@@ -236,92 +231,46 @@ export default function ProductPerformance() {
       setExpandedSku(null)
       setPage(0)
 
-      let query = supabase
-        .from('fct_sales_daily')
-        .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, buy_box_percentage, sku, title')
-        .in('marketplace', markets)
-        .gte('start_date', startDate)
-        .lte('start_date', endDate)
-        .order('start_date', { ascending: true })
-        .limit(50000)
-
-      const { data, error } = await query
+      // Server-side per-SKU aggregation — one row per SKU (revenue already in
+      // USD), so this never truncates at a daily-grain row cap. The `series`
+      // field carries day-level buckets, which getBucketedData re-buckets.
+      const { data, error } = await supabase.rpc('get_sku_sales', {
+        p_start: startDate,
+        p_end: endDate,
+        p_prior_start: priorStart,
+        p_prior_end: priorEnd,
+        p_markets: markets,
+        p_skus: null,
+      })
       if (error) { console.error(error); setLoading(false); return }
 
-      // Fetch prior period for comparison
-      const { data: pd } = await supabase
-        .from('fct_sales_daily')
-        .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sku')
-        .in('marketplace', markets)
-        .gte('start_date', priorStart)
-        .lte('start_date', priorEnd)
-        .limit(50000)
-      const prevRows: any[] = pd || []
-
-      // Aggregate by SKU
-      const bySku: Record<string, {
-        sku: string, title: string,
-        revenue: number, units: number,
-        sessions: number, conv_num: number, conv_den: number,
-        bb_sum: number, bb_count: number
-      }> = {}
-
-      // Period data for cadence — keyed by SKU then period_key
-      const periodBySku: Record<string, Record<string, DataPoint>> = {}
-
-      for (const row of data || []) {
-        if (!row.sku) continue
-        if (!bySku[row.sku]) {
-          bySku[row.sku] = { sku: row.sku, title: row.title || row.sku, revenue: 0, units: 0, sessions: 0, conv_num: 0, conv_den: 0, bb_sum: 0, bb_count: 0 }
-        }
-        const rev = toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
-        bySku[row.sku].revenue += rev
-        bySku[row.sku].units   += row.units_ordered || 0
-        bySku[row.sku].sessions += row.sessions || 0
-        if (row.sessions > 0) {
-          bySku[row.sku].conv_num += row.units_ordered || 0
-          bySku[row.sku].conv_den += row.sessions || 0
-        }
-        if (row.buy_box_percentage != null) {
-          bySku[row.sku].bb_sum   += row.buy_box_percentage
-          bySku[row.sku].bb_count += 1
-        }
-
-        // Period bucketing (always store at day level — re-bucket on render)
-        if (!periodBySku[row.sku]) periodBySku[row.sku] = {}
-        const dk = row.start_date
-        if (!periodBySku[row.sku][dk]) {
-          periodBySku[row.sku][dk] = {
-            period_key: dk,
-            label: new Date(dk + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-            revenue: 0, units: 0,
-          }
-        }
-        periodBySku[row.sku][dk].revenue += Math.round(rev)
-        periodBySku[row.sku][dk].units   += row.units_ordered || 0
-      }
-
-      // Prior period revenue by SKU
-      const prevBySku: Record<string, number> = {}
-      for (const row of prevRows) {
-        if (!row.sku) continue
-        prevBySku[row.sku] = (prevBySku[row.sku] || 0) + toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
-      }
-
-      // Build product rows
-      const rows: ProductRow[] = Object.values(bySku).map(p => {
-        const prev  = prevBySku[p.sku] || 0
-        const wow   = prev > 0 ? ((p.revenue - prev) / prev) * 100 : null
-        const conv  = p.conv_den > 0 ? (p.conv_num / p.conv_den) * 100 : 0
-        const asp   = p.units > 0 ? p.revenue / p.units : 0
-        const bb    = p.bb_count > 0 ? p.bb_sum / p.bb_count : null
-        return { sku: p.sku, title: p.title, revenue: Math.round(p.revenue), units: p.units, sessions: p.sessions, conv_rate: conv, asp, buy_box_pct: bb, wow_change: wow, prev_revenue: Math.round(prev) }
-      })
-
-      // Sort daily period data — store as flat day-level array
+      const rows: ProductRow[] = []
       const sortedPeriods: Record<string, DataPoint[]> = {}
-      for (const sku of Object.keys(periodBySku)) {
-        sortedPeriods[sku] = Object.values(periodBySku[sku]).sort((a, b) => a.period_key.localeCompare(b.period_key))
+
+      for (const r of (data || []) as any[]) {
+        const revenue = Number(r.revenue) || 0
+        const units = Number(r.units) || 0
+        const sessions = Number(r.sessions) || 0
+        const conv = Number(r.conv_rate) || 0
+        const bb = r.buy_box_pct != null ? Number(r.buy_box_pct) : null
+        const prev = Number(r.prev_revenue) || 0
+        const wow = prev > 0 ? ((revenue - prev) / prev) * 100 : null
+        const asp = units > 0 ? revenue / units : 0
+
+        rows.push({
+          sku: r.sku, title: r.title || r.sku,
+          revenue: Math.round(revenue), units, sessions,
+          conv_rate: conv, asp, buy_box_pct: bb,
+          wow_change: wow, prev_revenue: Math.round(prev),
+        })
+
+        // series arrives sorted by day ascending from the RPC
+        sortedPeriods[r.sku] = ((r.series as any[]) || []).map(pt => ({
+          period_key: pt.d,
+          label: new Date(pt.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          revenue: Math.round(Number(pt.revenue) || 0),
+          units: Number(pt.units) || 0,
+        }))
       }
 
       setProducts(rows)

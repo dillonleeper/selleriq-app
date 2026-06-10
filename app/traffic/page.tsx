@@ -18,8 +18,6 @@ import {
 // Constants & helpers
 // ─────────────────────────────────────────────────────────────
 
-const CAD_TO_USD = 0.74
-
 const PRESET_LABELS: Record<DatePreset, string> = {
   today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
 }
@@ -67,9 +65,6 @@ function fmt(n: number) {
 // Exact integer with comma separators — for unit counts (e.g. 11,807).
 function fmtUnits(n: number) {
   return Math.round(n).toLocaleString('en-US')
-}
-function toUSD(amount: number, marketplace: string) {
-  return marketplace === 'CA' ? amount * CAD_TO_USD : amount
 }
 function fmtDateLabel(iso: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -241,113 +236,52 @@ export default function TrafficConversion() {
       setExpandedSku(null)
       setPage(0)
 
-      let query = supabase
-        .from('fct_sales_daily')
-        .select('start_date, marketplace, units_ordered, sessions, page_views, buy_box_percentage, unit_session_percentage, sku, title')
-        .in('marketplace', markets)
-        .gte('start_date', startDate)
-        .lte('start_date', endDate)
-        .order('start_date', { ascending: true })
-        .limit(20000)
-
-      const { data, error } = await query
+      // Server-side per-SKU aggregation — one row per SKU, so this never
+      // truncates at a daily-grain row cap the way the old raw fetch did.
+      const { data, error } = await supabase.rpc('get_sku_sales', {
+        p_start: startDate,
+        p_end: endDate,
+        p_prior_start: priorStart,
+        p_prior_end: priorEnd,
+        p_markets: markets,
+        p_skus: null,
+      })
       if (error) { console.error(error); setLoading(false); return }
 
-      // Fetch prior period for conversion delta
-      const { data: pd } = await supabase
-        .from('fct_sales_daily')
-        .select('marketplace, units_ordered, sessions, sku')
-        .in('marketplace', markets)
-        .gte('start_date', priorStart)
-        .lte('start_date', priorEnd)
-        .limit(20000)
-      const prevRows: any[] = pd || []
+      const rows: ProductRow[] = []
+      const sortedWeekly: Record<string, WeeklyPoint[]> = {}
 
-      // Aggregate current period by SKU
-      const bySku: Record<string, {
-        sku: string, title: string,
-        sessions: number, page_views: number, units: number,
-        conv_num: number, conv_den: number,
-        bb_sum: number, bb_count: number,
-      }> = {}
-      const weeklyBySku: Record<string, Record<string, WeeklyPoint>> = {}
-
-      for (const row of data || []) {
-        if (!row.sku) continue
-        if (!bySku[row.sku]) {
-          bySku[row.sku] = {
-            sku: row.sku, title: row.title || row.sku,
-            sessions: 0, page_views: 0, units: 0,
-            conv_num: 0, conv_den: 0, bb_sum: 0, bb_count: 0,
-          }
-        }
-        bySku[row.sku].sessions += row.sessions || 0
-        bySku[row.sku].page_views += row.page_views || 0
-        bySku[row.sku].units += row.units_ordered || 0
-        if (row.sessions > 0) {
-          bySku[row.sku].conv_num += row.units_ordered || 0
-          bySku[row.sku].conv_den += row.sessions || 0
-        }
-        if (row.buy_box_percentage != null) {
-          bySku[row.sku].bb_sum += row.buy_box_percentage
-          bySku[row.sku].bb_count += 1
-        }
-
-        // Weekly trend points
-        if (!weeklyBySku[row.sku]) weeklyBySku[row.sku] = {}
-        const key = row.start_date
-        if (!weeklyBySku[row.sku][key]) {
-          weeklyBySku[row.sku][key] = {
-            raw_date: key,
-            start_date: new Date(key + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-            sessions: 0, conv_rate: 0, buy_box_pct: 0,
-          }
-        }
-        const point = weeklyBySku[row.sku][key]
-        // Sum across marketplaces for the same week
-        point.sessions += row.sessions || 0
-        // For weekly conv/BB, take simple session-weighted avg via the row
-        if (row.sessions > 0 && row.unit_session_percentage != null) {
-          const prevWeighted = point.conv_rate * (point.sessions - (row.sessions || 0))
-          point.conv_rate = (prevWeighted + (row.unit_session_percentage * row.sessions)) / point.sessions
-        }
-        if (row.buy_box_percentage != null) {
-          point.buy_box_pct = (point.buy_box_pct + row.buy_box_percentage) / (point.buy_box_pct === 0 ? 1 : 2)
-        }
-      }
-
-      // Aggregate prior period by SKU for conversion delta
-      const prevBySku: Record<string, { sessions: number, units: number }> = {}
-      for (const row of prevRows) {
-        if (!row.sku) continue
-        if (!prevBySku[row.sku]) prevBySku[row.sku] = { sessions: 0, units: 0 }
-        prevBySku[row.sku].sessions += row.sessions || 0
-        prevBySku[row.sku].units += row.units_ordered || 0
-      }
-
-      const rows: ProductRow[] = Object.values(bySku).map(p => {
-        const conv = p.conv_den > 0 ? (p.conv_num / p.conv_den) * 100 : 0
-        const vps = p.sessions > 0 ? p.page_views / p.sessions : 0
-        const bb = p.bb_count > 0 ? p.bb_sum / p.bb_count : null
-        const prev = prevBySku[p.sku]
-        const prevConv = prev && prev.sessions > 0 ? (prev.units / prev.sessions) * 100 : null
+      for (const r of (data || []) as any[]) {
+        const sessions = Number(r.sessions) || 0
+        const pageViews = Number(r.page_views) || 0
+        const units = Number(r.units) || 0
+        const conv = Number(r.conv_rate) || 0
+        const bb = r.buy_box_pct != null ? Number(r.buy_box_pct) : null
+        const vps = sessions > 0 ? pageViews / sessions : 0
+        const prevSessions = Number(r.prev_sessions) || 0
+        const prevUnits = Number(r.prev_units) || 0
+        const prevConv = prevSessions > 0 ? (prevUnits / prevSessions) * 100 : null
         const convChange = prevConv !== null ? conv - prevConv : null
-        const health = classifyHealth(p.sessions, conv, bb)
-        return {
-          sku: p.sku, title: p.title,
-          sessions: p.sessions, page_views: p.page_views,
+
+        rows.push({
+          sku: r.sku, title: r.title || r.sku,
+          sessions, page_views: pageViews,
           views_per_session: vps,
           conv_rate: conv, buy_box_pct: bb,
-          units: p.units,
+          units,
           prev_conv_rate: prevConv,
           conv_change: convChange,
-          health,
-        }
-      })
+          health: classifyHealth(sessions, conv, bb),
+        })
 
-      const sortedWeekly: Record<string, WeeklyPoint[]> = {}
-      for (const sku of Object.keys(weeklyBySku)) {
-        sortedWeekly[sku] = Object.values(weeklyBySku[sku]).sort((a, b) => a.raw_date.localeCompare(b.raw_date))
+        // series arrives sorted by day ascending from the RPC
+        sortedWeekly[r.sku] = ((r.series as any[]) || []).map(pt => ({
+          raw_date: pt.d,
+          start_date: new Date(pt.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          sessions: Number(pt.sessions) || 0,
+          conv_rate: Number(pt.conv_rate) || 0,
+          buy_box_pct: pt.buy_box_pct != null ? Number(pt.buy_box_pct) : 0,
+        }))
       }
 
       setProducts(rows)
