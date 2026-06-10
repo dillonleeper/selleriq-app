@@ -215,7 +215,7 @@ export default function SalesOverview() {
 
       const gran = granularityFor(dateRange!)
 
-      const aggregate = (rows: any[], clipStart?: string): WeeklyRow[] => {
+      const aggregate = (rows: any[]): WeeklyRow[] => {
         const buckets: Record<string, WeeklyRow> = {}
         for (const row of rows) {
           const key = gran === 'week' ? weekStartKey(row.start_date) : row.start_date
@@ -233,13 +233,12 @@ export default function SalesOverview() {
         }
         return Object.values(buckets)
           .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
-          .filter(w => !clipStart || w.raw_date >= clipStart)
           .map(w => ({ ...w, total_revenue: Math.round(w.total_revenue) }))
       }
 
       setGranularity(gran)
-      setWeeklyData(aggregate(data || [], startDate))
-      setPrevData(aggregate(prevRows, priorStart))
+      setWeeklyData(aggregate(data || []))
+      setPrevData(aggregate(prevRows))
 
       // Build product stats for top sellers + gainers/losers
       const bySku: Record<string, { sku: string, title: string, revenue: number, units: number }> = {}
