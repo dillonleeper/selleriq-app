@@ -14,6 +14,16 @@
 --
 -- Revenue is converted to USD here (CA × 0.74) to match the toUSD() helper in
 -- the pages, so the client no longer needs per-row currency conversion.
+--
+-- Performance: an earlier version wrapped the scan in a single materialized
+-- `base` CTE referenced three times. On the YTD window (~the whole table) that
+-- forced a wide temp materialization that was re-read three times, and the
+-- series sort spilled to disk — pushing the call past the role statement_timeout
+-- (anon 3s / authenticated 8s) and erroring with 57014. EXPLAIN confirmed the
+-- predicate matches ~all rows, so no index helps (a seq scan is correct). The
+-- fix is to drop the shared CTE and aggregate cur/prv/daily directly from the
+-- table (each streams the cached scan into a small hash table, no wide temp),
+-- and to raise work_mem for the function so the series sort stays in RAM.
 -- ─────────────────────────────────────────────────────────────────────────
 
 create or replace function public.get_sku_sales(
@@ -41,75 +51,67 @@ returns table (
 language sql
 stable
 as $$
-  with base as (
-    -- One scan covering both the current and prior windows. Marketplace +
-    -- optional SKU filter applied up front; revenue normalised to USD.
-    select
-      f.sku,
-      f.title,
-      f.start_date as d,
-      f.sessions,
-      f.page_views,
-      f.units_ordered,
-      case when f.marketplace = 'CA'
-           then f.ordered_product_sales_amount * 0.74
-           else f.ordered_product_sales_amount end as rev_usd,
-      f.buy_box_percentage
-    from fct_sales_daily f
-    where f.sku is not null
-      and f.marketplace = any (p_markets)
-      and (p_skus is null or f.sku = any (p_skus))
-      and (
-        (f.start_date between p_start and p_end)
-        or (f.start_date between p_prior_start and p_prior_end)
-      )
-  ),
-  cur as (
+  with cur as (
     -- Current-period totals, one row per SKU. conv_* and buy_box_pct replicate
     -- the page math exactly: units/sessions over days with traffic, and a plain
     -- average of the daily buy-box percentages (NULLs ignored, as AVG does).
     select
-      b.sku,
-      max(b.title)                                                as title,
-      sum(b.sessions)::bigint                                     as sessions,
-      sum(b.page_views)::bigint                                   as page_views,
-      sum(b.units_ordered)::numeric                               as units,
-      sum(b.rev_usd)::numeric                                     as revenue,
-      sum(b.units_ordered) filter (where b.sessions > 0)::numeric as conv_num,
-      sum(b.sessions)      filter (where b.sessions > 0)::numeric as conv_den,
-      avg(b.buy_box_percentage)::numeric                          as buy_box_pct
-    from base b
-    where b.d between p_start and p_end
-    group by b.sku
+      f.sku,
+      max(f.title) as title,
+      sum(f.sessions)::bigint as sessions,
+      sum(f.page_views)::bigint as page_views,
+      sum(f.units_ordered)::numeric as units,
+      sum(case when f.marketplace = 'CA'
+               then f.ordered_product_sales_amount * 0.74
+               else f.ordered_product_sales_amount end)::numeric as revenue,
+      sum(f.units_ordered) filter (where f.sessions > 0)::numeric as conv_num,
+      sum(f.sessions)      filter (where f.sessions > 0)::numeric as conv_den,
+      avg(f.buy_box_percentage)::numeric as buy_box_pct
+    from fct_sales_daily f
+    where f.sku is not null
+      and f.marketplace = any (p_markets)
+      and (p_skus is null or f.sku = any (p_skus))
+      and f.start_date between p_start and p_end
+    group by f.sku
   ),
   prv as (
     -- Prior-period totals for the delta columns (vs-prior revenue, conv change).
     select
-      b.sku,
-      sum(b.sessions)::bigint        as prev_sessions,
-      sum(b.units_ordered)::numeric  as prev_units,
-      sum(b.rev_usd)::numeric        as prev_revenue
-    from base b
-    where b.d between p_prior_start and p_prior_end
-    group by b.sku
+      f.sku,
+      sum(f.sessions)::bigint as prev_sessions,
+      sum(f.units_ordered)::numeric as prev_units,
+      sum(case when f.marketplace = 'CA'
+               then f.ordered_product_sales_amount * 0.74
+               else f.ordered_product_sales_amount end)::numeric as prev_revenue
+    from fct_sales_daily f
+    where f.sku is not null
+      and f.marketplace = any (p_markets)
+      and (p_skus is null or f.sku = any (p_skus))
+      and f.start_date between p_prior_start and p_prior_end
+    group by f.sku
   ),
   daily as (
     -- Per-SKU, per-day buckets (collapsed across marketplaces) for the charts.
     select
-      b.sku,
-      b.d,
-      sum(b.sessions)::bigint                                     as sessions,
-      sum(b.page_views)::bigint                                   as page_views,
-      sum(b.units_ordered)::numeric                               as units,
-      sum(b.rev_usd)::numeric                                     as revenue,
-      case when sum(b.sessions) filter (where b.sessions > 0) > 0
-           then (sum(b.units_ordered) filter (where b.sessions > 0)
-                 / sum(b.sessions) filter (where b.sessions > 0)) * 100
-           else 0 end                                            as conv_rate,
-      avg(b.buy_box_percentage)::numeric                          as buy_box_pct
-    from base b
-    where b.d between p_start and p_end
-    group by b.sku, b.d
+      f.sku,
+      f.start_date as d,
+      sum(f.sessions)::bigint as sessions,
+      sum(f.page_views)::bigint as page_views,
+      sum(f.units_ordered)::numeric as units,
+      sum(case when f.marketplace = 'CA'
+               then f.ordered_product_sales_amount * 0.74
+               else f.ordered_product_sales_amount end)::numeric as revenue,
+      case when sum(f.sessions) filter (where f.sessions > 0) > 0
+           then (sum(f.units_ordered) filter (where f.sessions > 0)
+                 / sum(f.sessions) filter (where f.sessions > 0)) * 100
+           else 0 end as conv_rate,
+      avg(f.buy_box_percentage)::numeric as buy_box_pct
+    from fct_sales_daily f
+    where f.sku is not null
+      and f.marketplace = any (p_markets)
+      and (p_skus is null or f.sku = any (p_skus))
+      and f.start_date between p_start and p_end
+    group by f.sku, f.start_date
   ),
   ser as (
     select
@@ -146,6 +148,11 @@ as $$
   left join prv on prv.sku = cur.sku
   left join ser on ser.sku = cur.sku;
 $$;
+
+-- Keep the per-SKU daily series sort in RAM instead of spilling to disk on the
+-- long (YTD) window. Applies only for the duration of this function's calls.
+alter function public.get_sku_sales(date, date, date, date, text[], text[])
+  set work_mem = '64MB';
 
 -- The pages call this with the Supabase anon key, exactly as they queried the
 -- table before. The function is not SECURITY DEFINER, so any RLS on
