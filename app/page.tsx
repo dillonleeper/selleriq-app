@@ -5,8 +5,9 @@ import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, BarChart, Bar
+  Area, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer,
+  ComposedChart, AreaChart, Line
 } from 'recharts'
 import {
   TrendingUp, TrendingDown, DollarSign, ShoppingCart,
@@ -28,13 +29,16 @@ type WeeklyRow = {
   total_page_views: number
 }
 
-type ProductStat = {
-  sku: string
-  title: string
-  revenue: number
-  units: number
-  prev_revenue: number
-  change_pct: number | null
+// Chart-only bucketing (independent of the date-preset granularity logic below).
+type ChartBucket = 'day' | 'week' | 'month'
+type ChartPoint = {
+  raw_date: string
+  label: string
+  total_revenue: number
+  total_units: number
+  total_sessions: number
+  total_page_views: number
+  conv_rate: number
 }
 
 function fmt(n: number) {
@@ -60,6 +64,10 @@ function fmtDateLabel(iso: string) {
 function shortLabel(iso: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
+// Month axis label, e.g. "Jun 2025".
+function monthLabel(iso: string) {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+}
 // Sunday-start week key (YYYY-MM-DD) for the week containing dateStr.
 function weekStartKey(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00')
@@ -68,6 +76,41 @@ function weekStartKey(dateStr: string): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+// First-of-month key (YYYY-MM-01) for the month containing dateStr.
+function monthStartKey(dateStr: string): string {
+  return dateStr.slice(0, 7) + '-01'
+}
+
+// Re-bucket the per-day series into daily / weekly / monthly points for the charts.
+// Totals are bucket-independent, so summary cards are unaffected by this control.
+function bucketSeries(rows: WeeklyRow[], bucket: ChartBucket): ChartPoint[] {
+  const keyFn =
+    bucket === 'week' ? weekStartKey :
+    bucket === 'month' ? monthStartKey :
+    (d: string) => d
+  const buckets: Record<string, ChartPoint> = {}
+  for (const r of rows) {
+    const key = keyFn(r.raw_date)
+    if (!buckets[key]) {
+      buckets[key] = {
+        raw_date: key, label: '',
+        total_revenue: 0, total_units: 0, total_sessions: 0, total_page_views: 0, conv_rate: 0,
+      }
+    }
+    const b = buckets[key]
+    b.total_revenue += r.total_revenue
+    b.total_units += r.total_units
+    b.total_sessions += r.total_sessions
+    b.total_page_views += r.total_page_views
+  }
+  return Object.values(buckets)
+    .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
+    .map(b => ({
+      ...b,
+      label: bucket === 'month' ? monthLabel(b.raw_date) : shortLabel(b.raw_date),
+      conv_rate: b.total_sessions > 0 ? (b.total_units / b.total_sessions) * 100 : 0,
+    }))
 }
 
 type Granularity = 'day' | 'week'
@@ -94,7 +137,9 @@ const CustomTooltip = ({ active, payload, label }: any) => {
       {payload.map((p: any, i: number) => (
         <div key={i} style={{ color: p.color, marginBottom: '2px' }}>
           {p.name}: <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-            {p.name === 'Revenue' ? fmtCurrency(p.value) : fmt(p.value)}
+            {p.name === 'Revenue' ? fmtCurrency(p.value)
+              : p.name === 'Conversion Rate' ? p.value.toFixed(2) + '%'
+              : fmt(p.value)}
           </span>
         </div>
       ))}
@@ -105,12 +150,10 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export default function SalesOverview() {
   const [markets, setMarkets] = useState(['US', 'CA'])
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
-  const [weeklyData, setWeeklyData] = useState<WeeklyRow[]>([])
+  const [dailySeries, setDailySeries] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
-  const [granularity, setGranularity] = useState<Granularity>('day')
-  const [productStats, setProductStats] = useState<ProductStat[]>([])
+  const [chartBucket, setChartBucket] = useState<ChartBucket>('week')
   const [loading, setLoading] = useState(true)
-  const [topSortBy, setTopSortBy] = useState<'revenue' | 'units'>('revenue')
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -219,12 +262,12 @@ export default function SalesOverview() {
       const { data: pd } = await prevQuery
       const prevRows: any[] = pd || []
 
-      const gran = granularityFor(dateRange!)
-
+      // Aggregate to a per-day, marketplace-combined series. The chart-bucket
+      // control re-buckets this client-side; summary totals sum it directly.
       const aggregate = (rows: any[], clipStart?: string): WeeklyRow[] => {
         const buckets: Record<string, WeeklyRow> = {}
         for (const row of rows) {
-          const key = gran === 'week' ? weekStartKey(row.start_date) : row.start_date
+          const key = row.start_date
           if (!buckets[key]) {
             buckets[key] = {
               raw_date: key,
@@ -243,38 +286,14 @@ export default function SalesOverview() {
           .map(w => ({ ...w, total_revenue: Math.round(w.total_revenue) }))
       }
 
-      setGranularity(gran)
-      setWeeklyData(aggregate(data || [], startDate))
+      setDailySeries(aggregate(data || [], startDate))
       setPrevData(aggregate(prevRows, priorStart))
-
-      // Build product stats for top sellers + gainers/losers
-      const bySku: Record<string, { sku: string, title: string, revenue: number, units: number }> = {}
-      for (const row of data || []) {
-        if (!row.sku) continue
-        if (!bySku[row.sku]) bySku[row.sku] = { sku: row.sku, title: row.title || row.sku, revenue: 0, units: 0 }
-        bySku[row.sku].revenue += toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
-        bySku[row.sku].units += row.units_ordered || 0
-      }
-
-      const prevBySku: Record<string, number> = {}
-      for (const row of prevRows) {
-        if (!row.sku) continue
-        prevBySku[row.sku] = (prevBySku[row.sku] || 0) + toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
-      }
-
-      const stats: ProductStat[] = Object.values(bySku).map(p => {
-        const prev = prevBySku[p.sku] || 0
-        const change_pct = prev > 0 ? ((p.revenue - prev) / prev) * 100 : null
-        return { ...p, revenue: Math.round(p.revenue), prev_revenue: Math.round(prev), change_pct }
-      })
-
-      setProductStats(stats)
       setLoading(false)
     }
     load()
   }, [markets, dateRange, selectedProducts])
 
-  const sum = (key: keyof WeeklyRow) => weeklyData.reduce((s, r) => s + (r[key] as number), 0)
+  const sum = (key: keyof WeeklyRow) => dailySeries.reduce((s, r) => s + (r[key] as number), 0)
   const prevSum = (key: keyof WeeklyRow) => prevData.reduce((s, r) => s + (r[key] as number), 0)
 
   const totalRevenue   = sum('total_revenue')
@@ -292,18 +311,27 @@ export default function SalesOverview() {
   const trend = (curr: number, prev: number) => prev > 0 ? ((curr - prev) / prev) * 100 : null
   const rangeLabel = dateRange ? PRESET_LABELS[dateRange.preset] : ''
 
-  // Top sellers
-  const topSellers = [...productStats]
-    .sort((a, b) => topSortBy === 'revenue' ? b.revenue - a.revenue : b.units - a.units)
-    .slice(0, 10)
+  // Chart series for the selected bucketing (shared by all three charts).
+  const chartData = bucketSeries(dailySeries, chartBucket)
+  const bucketAdj = chartBucket === 'day' ? 'Daily' : chartBucket === 'week' ? 'Weekly' : 'Monthly'
 
-  // Gainers and losers — only include products with prior period data
-  const withChange = productStats.filter(p => p.change_pct !== null)
-  const topGainers = [...withChange].sort((a, b) => (b.change_pct || 0) - (a.change_pct || 0)).slice(0, 10)
-  const topLosers = [...withChange]
-  .filter(p => p.revenue > 0).sort((a, b) => (a.change_pct || 0) - (b.change_pct || 0)).slice(0, 10)
-
-  const hasPriorPeriod = prevData.length > 0
+  // Total Sales Breakdown — LIVE rows carry real values; PLACEHOLDER rows
+  // (value: null) are pending the Orders/Finance pipelines. Wiring a real
+  // value in later is just swapping null → a number.
+  type BreakdownRow = { label: string; value: number | null; live?: boolean; strong?: boolean }
+  const salesBreakdown: BreakdownRow[] = [
+    { label: 'Gross sales', value: totalRevenue, live: true },
+    { label: 'Discounts', value: null },
+    { label: 'Returns', value: null },
+    { label: 'Net sales', value: null, strong: true },
+    { label: 'Shipping charges', value: null },
+    { label: 'Return fees', value: null },
+    { label: 'Taxes', value: null },
+    { label: 'Total sales', value: null, strong: true },
+    { label: 'Payout', value: null },
+    { label: 'COGS', value: null },
+    { label: 'Bottom-line profit', value: null, strong: true },
+  ]
 
   // Preset-aware empty-state label for the prior-period comparison line.
   const noPriorLabel =
@@ -509,23 +537,43 @@ export default function SalesOverview() {
             ))}
           </div>
 
-          {/* Revenue Chart */}
+          {/* Revenue + Units (dual-axis) with bucketing toggle */}
           <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
-            <div style={{ marginBottom: '18px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>
-                {granularity === 'week' ? 'Weekly' : 'Daily'} Revenue
-                {selectedProducts.length > 0 && (
-                  <span style={{ fontSize: '11px', color: 'var(--accent)', marginLeft: '8px' }}>
-                    {selectedProducts.length} product{selectedProducts.length > 1 ? 's' : ''} selected
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '18px' }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <span>{bucketAdj} Revenue &amp; Units</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: 'var(--chart-primary)' }} /> Revenue
                   </span>
-                )}
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: 'var(--chart-success)' }} /> Units
+                  </span>
+                  {selectedProducts.length > 0 && (
+                    <span style={{ fontSize: '11px', color: 'var(--accent)' }}>
+                      {selectedProducts.length} product{selectedProducts.length > 1 ? 's' : ''} selected
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  USD · {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
+                </div>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                USD · {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
+              {/* Chart-only bucketing control */}
+              <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                {(['day', 'week', 'month'] as const).map(b => (
+                  <button key={b} onClick={() => setChartBucket(b)} style={{
+                    padding: '3px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 500,
+                    cursor: 'pointer', transition: 'all 0.12s ease',
+                    border: chartBucket === b ? '1px solid var(--accent-border)' : '1px solid var(--border)',
+                    background: chartBucket === b ? 'var(--accent-light)' : 'transparent',
+                    color: chartBucket === b ? 'var(--accent)' : 'var(--text-muted)',
+                  }}>{b === 'day' ? 'Daily' : b === 'week' ? 'Weekly' : 'Monthly'}</button>
+                ))}
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={weeklyData}>
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={chartData}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
@@ -533,160 +581,117 @@ export default function SalesOverview() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="start_date" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis yAxisId="rev" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />
+                <YAxis yAxisId="units" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
                 <Tooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
-              </AreaChart>
+                <Area yAxisId="rev" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
+                <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={1.5} dot={false} />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Units Chart */}
-          <div className="card" style={{ padding: '24px', marginBottom: '20px' }}>
-            <div style={{ marginBottom: '18px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>{granularity === 'week' ? 'Weekly' : 'Daily'} Units Ordered</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>All selected marketplaces combined</div>
-            </div>
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={weeklyData} barSize={8}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="start_date" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="total_units" name="Units" fill="var(--chart-success)" radius={[2, 2, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Bottom row — Top Sellers + Gainers/Losers */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-
-            {/* Top Sellers */}
-            <div className="card" style={{ padding: '20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 500 }}>Top Sellers</div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  {(['revenue', 'units'] as const).map(s => (
-                    <button key={s} onClick={() => setTopSortBy(s)} style={{
-                      padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 500,
-                      cursor: 'pointer', transition: 'all 0.12s ease',
-                      border: topSortBy === s ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                      background: topSortBy === s ? 'var(--accent-light)' : 'transparent',
-                      color: topSortBy === s ? 'var(--accent)' : 'var(--text-muted)',
-                      textTransform: 'capitalize',
-                    }}>{s}</button>
-                  ))}
-                </div>
+          {/* Sessions + Conversion rate over time */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
+            <div className="card" style={{ padding: '24px' }}>
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Sessions over time</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} · all selected marketplaces combined</div>
               </div>
-              <div>
-                {topSellers.map((p, i) => (
-                  <div key={p.sku} style={{
-                    display: 'flex', alignItems: 'center', gap: '10px',
-                    padding: '8px 0',
-                    borderBottom: i < topSellers.length - 1 ? '1px solid var(--border)' : 'none',
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="sessGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--yellow)" stopOpacity={0.9} />
+                      <stop offset="95%" stopColor="var(--yellow)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Area type="monotone" dataKey="total_sessions" name="Sessions" stroke="var(--yellow)" strokeWidth={1.5} fill="url(#sessGrad)" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="card" style={{ padding: '24px' }}>
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Conversion rate over time</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} · units ÷ sessions</div>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="convGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#EC4899" stopOpacity={0.9} />
+                      <stop offset="95%" stopColor="#EC4899" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.toFixed(1) + '%'} width={50} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Area type="monotone" dataKey="conv_rate" name="Conversion Rate" stroke="#EC4899" strokeWidth={1.5} fill="url(#convGrad)" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Total Sales Breakdown */}
+          <div className="card" style={{ padding: '24px' }}>
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Total Sales Breakdown</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Gross sales is live · remaining rows pending the Orders &amp; Finance pipelines
+              </div>
+            </div>
+
+            <div>
+              {salesBreakdown.map((row, i) => {
+                const isPlaceholder = row.value === null
+                return (
+                  <div key={row.label} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                    padding: '9px 0',
+                    borderBottom: i < salesBreakdown.length - 1 ? '1px solid var(--border)' : 'none',
+                    opacity: isPlaceholder ? 0.55 : 1,
                   }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace', width: '16px', flexShrink: 0 }}>
-                      {i + 1}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {truncate(p.title, 40)}
-                      </div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace', marginTop: '1px' }}>
-                        {p.sku}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace' }}>
-                        {topSortBy === 'revenue' ? fmtCurrency(p.revenue) : fmtUnits(p.units) + ' units'}
-                      </div>
-                      {topSortBy === 'revenue' && (
-                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '1px' }}>
-                          {fmtUnits(p.units)} units
-                        </div>
+                    <span style={{
+                      fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px',
+                      fontWeight: row.strong ? 600 : 400,
+                      color: row.strong ? 'var(--text-primary)' : 'var(--text-muted)',
+                    }}>
+                      {row.label}
+                      {row.live && (
+                        <span style={{
+                          fontSize: '9px', fontWeight: 600, letterSpacing: '0.04em',
+                          color: 'var(--green)', background: 'var(--green-light)',
+                          borderRadius: '4px', padding: '1px 6px', textTransform: 'uppercase',
+                        }}>Live</span>
                       )}
-                    </div>
+                    </span>
+                    {isPlaceholder ? (
+                      <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                        Not yet tracked
+                      </span>
+                    ) : (
+                      <span style={{
+                        fontSize: '13px', fontWeight: row.strong ? 700 : 600,
+                        color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace',
+                      }}>
+                        {fmtCurrency(row.value as number)}
+                      </span>
+                    )}
                   </div>
-                ))}
-              </div>
+                )
+              })}
             </div>
 
-            {/* Gainers / Losers */}
-            <div className="card" style={{ padding: '20px' }}>
-              <div style={{ marginBottom: '16px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>
-                  Top Gainers & Losers
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  {hasPriorPeriod ? `Revenue change vs prior ${rangeLabel} period` : 'No prior-period data available to compare'}
-                </div>
-              </div>
-
-              {!hasPriorPeriod ? (
-                <div style={{ color: 'var(--text-dim)', fontSize: '12px', paddingTop: '8px' }}>
-                  No products had revenue in the prior period for this range.
-                </div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0' }}>
-                  {/* Gainers */}
-                  <div>
-                    <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--green)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>
-                      ↑ Gainers
-                    </div>
-                    {topGainers.filter(p => (p.change_pct || 0) > 0).slice(0, 4).map((p, i, arr) => (
-                      <div key={p.sku} style={{
-                        padding: '7px 0',
-                        borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none',
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                          <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                            {truncate(p.sku, 16)}
-                          </div>
-                          <span style={{
-                            fontSize: '11px', fontWeight: 600, color: 'var(--green)',
-                            background: 'var(--green-light)', borderRadius: '4px',
-                            padding: '1px 6px', flexShrink: 0, fontFamily: 'JetBrains Mono, monospace',
-                          }}>
-                            +{p.change_pct!.toFixed(1)}%
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px', fontFamily: 'JetBrains Mono, monospace' }}>
-                          {fmtCurrency(p.revenue)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Losers */}
-                  <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>
-                      ↓ Losers
-                    </div>
-                    {topLosers.filter(p => (p.change_pct || 0) < 0).slice(0, 4).map((p, i, arr) => (
-                      <div key={p.sku} style={{
-                        padding: '7px 0',
-                        borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none',
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                          <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                            {truncate(p.sku, 16)}
-                          </div>
-                          <span style={{
-                            fontSize: '11px', fontWeight: 600, color: 'var(--red)',
-                            background: 'var(--red-light)', borderRadius: '4px',
-                            padding: '1px 6px', flexShrink: 0, fontFamily: 'JetBrains Mono, monospace',
-                          }}>
-                            {p.change_pct!.toFixed(1)}%
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px', fontFamily: 'JetBrains Mono, monospace' }}>
-                          {fmtCurrency(p.revenue)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <div style={{ marginTop: '14px', fontSize: '11px', color: 'var(--text-dim)', lineHeight: 1.5 }}>
+              Finance &amp; COGS figures (discounts, returns, fees, taxes, payout, COGS and derived
+              net/total/profit lines) are not yet tracked. They will populate once the Orders and
+              Finance pipelines land.
             </div>
           </div>
         </>
