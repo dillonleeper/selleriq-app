@@ -29,6 +29,20 @@ type WeeklyRow = {
   total_page_views: number
 }
 
+// One P&L line from the get_finance_pnl RPC (dev). Amounts are already USD
+// (server-side CA→USD at the same 0.74 rate the KPI cards use — do NOT re-run
+// through toUSD).
+type FinanceRow = {
+  pnl_category: string
+  widget_line: string
+  display_order: number
+  include_in_operating_sum: boolean
+  is_expandable: boolean
+  amount_usd: number
+  event_count: number
+  deferred_count: number
+}
+
 // Chart-only bucketing (independent of the date-preset granularity logic below).
 type ChartBucket = 'day' | 'week' | 'month'
 type ChartPoint = {
@@ -51,7 +65,9 @@ function fmtUnits(n: number) {
   return Math.round(n).toLocaleString('en-US')
 }
 function fmtCurrency(n: number) {
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  // Sign-aware: negatives render as -$X (fees/refunds). Non-negative is unchanged.
+  const abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  return (n < 0 ? '-$' : '$') + abs
 }
 function fmtASP(n: number) { return '$' + n.toFixed(2) }
 function toUSD(amount: number, marketplace: string) {
@@ -154,6 +170,8 @@ export default function SalesOverview() {
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
   const [chartBucket, setChartBucket] = useState<ChartBucket>('week')
   const [loading, setLoading] = useState(true)
+  // Finance P&L breakdown (null = not loaded yet; [] = loaded, no rows for range).
+  const [finance, setFinance] = useState<FinanceRow[] | null>(null)
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -288,6 +306,20 @@ export default function SalesOverview() {
 
       setDailySeries(aggregate(data || [], startDate))
       setPrevData(aggregate(prevRows, priorStart))
+
+      // Finance P&L breakdown — period totals in USD (no toUSD). The RPC has no
+      // SKU param (period-grain); the widget hides when a SKU filter is active,
+      // so we don't pass selectedProducts here. p_marketplace: single when one
+      // market is selected, else null = all (US/CA are the only markets).
+      const p_marketplace = markets.length === 1 ? markets[0] : null
+      const { data: fin, error: finErr } = await supabase.rpc('get_finance_pnl', {
+        p_start: startDate,
+        p_end: endDate,
+        p_marketplace,
+      })
+      if (finErr) { console.error(finErr); setFinance([]) }
+      else setFinance((fin || []) as FinanceRow[])
+
       setLoading(false)
     }
     load()
@@ -315,23 +347,30 @@ export default function SalesOverview() {
   const chartData = bucketSeries(dailySeries, chartBucket)
   const bucketAdj = chartBucket === 'day' ? 'Daily' : chartBucket === 'week' ? 'Weekly' : 'Monthly'
 
-  // Total Sales Breakdown — LIVE rows carry real values; PLACEHOLDER rows
-  // (value: null) are pending the Orders/Finance pipelines. Wiring a real
-  // value in later is just swapping null → a number.
-  type BreakdownRow = { label: string; value: number | null; live?: boolean; strong?: boolean }
-  const salesBreakdown: BreakdownRow[] = [
-    { label: 'Gross sales', value: totalRevenue, live: true },
-    { label: 'Discounts', value: null },
-    { label: 'Returns', value: null },
-    { label: 'Net sales', value: null, strong: true },
-    { label: 'Shipping charges', value: null },
-    { label: 'Return fees', value: null },
-    { label: 'Taxes', value: null },
-    { label: 'Total sales', value: null, strong: true },
-    { label: 'Payout', value: null },
+  // ─── Total Sales Breakdown (finance settlement P&L, from get_finance_pnl) ───
+  // Reshaped off the RPC by display_order. value: null → "Not yet tracked".
+  type BreakdownRow = { label: string; value: number | null; live?: boolean; strong?: boolean; hint?: string }
+
+  const skuFilterActive = selectedProducts.length > 0
+  const financeRows = finance ?? []
+  const hasFinance = financeRows.length > 0
+
+  // Operating lines (include_in_operating_sum), in the RPC's display order.
+  // Payout (Transfer, !include_in_operating_sum) is deliberately NOT displayed
+  // in this P&L widget — it's a cash-flow figure, not accrual. The RPC still
+  // returns it; a future dedicated payouts/cash-flow view can surface it.
+  const operatingRows = financeRows
+    .filter(r => r.include_in_operating_sum)
+    .sort((a, b) => a.display_order - b.display_order)
+  const netProceeds = operatingRows.reduce((s, r) => s + Number(r.amount_usd || 0), 0)
+  const totalDeferred = financeRows.reduce((s, r) => s + Number(r.deferred_count || 0), 0)
+
+  const salesBreakdown: BreakdownRow[] = hasFinance ? [
+    ...operatingRows.map(r => ({ label: r.widget_line, value: Number(r.amount_usd || 0) })),
+    { label: 'Marketplace net proceeds (before COGS)', value: netProceeds, live: true, strong: true },
     { label: 'COGS', value: null },
     { label: 'Bottom-line profit', value: null, strong: true },
-  ]
+  ] : []
 
   // Preset-aware empty-state label for the prior-period comparison line.
   const noPriorLabel =
@@ -643,56 +682,82 @@ export default function SalesOverview() {
             <div style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Total Sales Breakdown</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Gross sales is live · remaining rows pending the Orders &amp; Finance pipelines
+                Finance settlement P&amp;L (USD) · &ldquo;Gross sales&rdquo; here is settlement product charges,
+                distinct from the ordered-revenue KPI above
               </div>
             </div>
 
-            <div>
-              {salesBreakdown.map((row, i) => {
-                const isPlaceholder = row.value === null
-                return (
-                  <div key={row.label} style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-                    padding: '9px 0',
-                    borderBottom: i < salesBreakdown.length - 1 ? '1px solid var(--border)' : 'none',
-                    opacity: isPlaceholder ? 0.55 : 1,
-                  }}>
-                    <span style={{
-                      fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px',
-                      fontWeight: row.strong ? 600 : 400,
-                      color: row.strong ? 'var(--text-primary)' : 'var(--text-muted)',
-                    }}>
-                      {row.label}
-                      {row.live && (
-                        <span style={{
-                          fontSize: '9px', fontWeight: 600, letterSpacing: '0.04em',
-                          color: 'var(--green)', background: 'var(--green-light)',
-                          borderRadius: '4px', padding: '1px 6px', textTransform: 'uppercase',
-                        }}>Live</span>
-                      )}
-                    </span>
-                    {isPlaceholder ? (
-                      <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                        Not yet tracked
-                      </span>
-                    ) : (
-                      <span style={{
-                        fontSize: '13px', fontWeight: row.strong ? 700 : 600,
-                        color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace',
+            {skuFilterActive ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
+                Total Sales Breakdown reflects your whole account; per-SKU P&amp;L isn&rsquo;t available yet.
+                Clear the product filter to see the account-level breakdown.
+              </div>
+            ) : !hasFinance ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
+                No finance data loaded for this period yet. Finance data is currently available for{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>June 8&ndash;23, 2026</strong>{' '}
+                (plus isolated pulls on June 15 and July 11). Select a range within that window to see the breakdown.
+              </div>
+            ) : (
+              <>
+                <div>
+                  {salesBreakdown.map((row, i) => {
+                    const isPlaceholder = row.value === null
+                    return (
+                      <div key={row.label} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                        padding: '9px 0',
+                        borderBottom: i < salesBreakdown.length - 1 ? '1px solid var(--border)' : 'none',
+                        opacity: isPlaceholder ? 0.55 : 1,
                       }}>
-                        {fmtCurrency(row.value as number)}
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+                        <span style={{
+                          fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px',
+                          fontWeight: row.strong ? 600 : 400,
+                          color: row.strong ? 'var(--text-primary)' : 'var(--text-muted)',
+                        }}>
+                          {row.label}
+                          {row.hint && (
+                            <span style={{ fontSize: '10px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                              ({row.hint})
+                            </span>
+                          )}
+                          {row.live && (
+                            <span style={{
+                              fontSize: '9px', fontWeight: 600, letterSpacing: '0.04em',
+                              color: 'var(--green)', background: 'var(--green-light)',
+                              borderRadius: '4px', padding: '1px 6px', textTransform: 'uppercase',
+                            }}>Live</span>
+                          )}
+                        </span>
+                        {isPlaceholder ? (
+                          <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                            Not yet tracked
+                          </span>
+                        ) : (
+                          <span style={{
+                            fontSize: '13px', fontWeight: row.strong ? 700 : 600,
+                            color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace',
+                          }}>
+                            {fmtCurrency(row.value as number)}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
 
-            <div style={{ marginTop: '14px', fontSize: '11px', color: 'var(--text-dim)', lineHeight: 1.5 }}>
-              Finance &amp; COGS figures (discounts, returns, fees, taxes, payout, COGS and derived
-              net/total/profit lines) are not yet tracked. They will populate once the Orders and
-              Finance pipelines land.
-            </div>
+                {totalDeferred > 0 && (
+                  <div style={{ marginTop: '12px', fontSize: '11px', color: 'var(--yellow)', lineHeight: 1.5 }}>
+                    {fmtUnits(totalDeferred)} event{totalDeferred === 1 ? '' : 's'} in this range{' '}
+                    {totalDeferred === 1 ? 'is' : 'are'} not yet settled (deferred); these figures may change as they finalize.
+                  </div>
+                )}
+
+                <div style={{ marginTop: '14px', fontSize: '11px', color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                  COGS and bottom-line profit are not yet tracked (COGS is not in the finance feed).
+                </div>
+              </>
+            )}
           </div>
         </>
       )}
