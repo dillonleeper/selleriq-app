@@ -172,6 +172,9 @@ export default function SalesOverview() {
   const [loading, setLoading] = useState(true)
   // Finance P&L breakdown (null = not loaded yet; [] = loaded, no rows for range).
   const [finance, setFinance] = useState<FinanceRow[] | null>(null)
+  // Whether the last get_finance_pnl call errored (e.g. timeout). Kept separate
+  // from an empty result so a failed fetch isn't rendered as "no data exists".
+  const [financeError, setFinanceError] = useState(false)
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -317,8 +320,8 @@ export default function SalesOverview() {
         p_end: endDate,
         p_marketplace,
       })
-      if (finErr) { console.error(finErr); setFinance([]) }
-      else setFinance((fin || []) as FinanceRow[])
+      if (finErr) { console.error(finErr); setFinanceError(true); setFinance([]) }
+      else { setFinanceError(false); setFinance((fin || []) as FinanceRow[]) }
 
       setLoading(false)
     }
@@ -692,11 +695,14 @@ export default function SalesOverview() {
                 Total Sales Breakdown reflects your whole account; per-SKU P&amp;L isn&rsquo;t available yet.
                 Clear the product filter to see the account-level breakdown.
               </div>
+            ) : financeError ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
+                Couldn&rsquo;t load the finance breakdown for this period&mdash;the request timed out or failed.
+                This doesn&rsquo;t mean the data is missing; try again, or narrow the date range.
+              </div>
             ) : !hasFinance ? (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
-                No finance data loaded for this period yet. Finance data is currently available for{' '}
-                <strong style={{ color: 'var(--text-primary)' }}>June 8&ndash;23, 2026</strong>{' '}
-                (plus isolated pulls on June 15 and July 11). Select a range within that window to see the breakdown.
+                No finance data for the selected period.
               </div>
             ) : (
               <>
