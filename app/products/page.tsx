@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
-import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
+import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line
@@ -12,10 +12,6 @@ import {
   ChevronDown, ChevronRight, TrendingUp, TrendingDown,
   Minus, ArrowUpDown, ArrowUp, ArrowDown, Search, Download, X
 } from 'lucide-react'
-
-const PRESET_LABELS: Record<DatePreset, string> = {
-  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
-}
 
 type CadenceGrouping = 'day' | 'week' | 'month'
 

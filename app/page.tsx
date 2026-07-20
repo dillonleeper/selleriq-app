@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
-import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
+import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -15,10 +15,6 @@ import {
 } from 'lucide-react'
 
 const CAD_TO_USD = 0.74
-
-const PRESET_LABELS: Record<DatePreset, string> = {
-  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
-}
 
 type WeeklyRow = {
   raw_date: string
@@ -127,22 +123,6 @@ function bucketSeries(rows: WeeklyRow[], bucket: ChartBucket): ChartPoint[] {
       label: bucket === 'month' ? monthLabel(b.raw_date) : shortLabel(b.raw_date),
       conv_rate: b.total_sessions > 0 ? (b.total_units / b.total_sessions) * 100 : 0,
     }))
-}
-
-type Granularity = 'day' | 'week'
-
-// Chart bucketing per the selected preset. Short ranges → daily points;
-// long ranges (YTD, custom > 31 days) → weekly buckets.
-function granularityFor(dr: DateRange): Granularity {
-  if (dr.preset === 'ytd') return 'week'
-  if (dr.preset === 'custom') {
-    // Long custom windows (> 31 days) get weekly buckets; shorter ones stay daily.
-    const start = new Date(dr.startDate + 'T12:00:00')
-    const end = new Date(dr.endDate + 'T12:00:00')
-    const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1
-    return days > 31 ? 'week' : 'day'
-  }
-  return 'day' // today / yesterday / wtd / mtd → daily
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {

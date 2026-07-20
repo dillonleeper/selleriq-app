@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
-import DateRangeFilter, { DateRange, DatePreset } from '@/components/DateRangeFilter'
+import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line,
@@ -17,10 +17,6 @@ import {
 // ─────────────────────────────────────────────────────────────
 // Constants & helpers
 // ─────────────────────────────────────────────────────────────
-
-const PRESET_LABELS: Record<DatePreset, string> = {
-  today: 'Today', yesterday: 'Yesterday', wtd: 'WTD', mtd: 'MTD', ytd: 'YTD', custom: 'Custom',
-}
 
 // Health classification thresholds. Tweak these once you have a feel
 // for what "good" looks like for your specific catalog.
