@@ -208,6 +208,7 @@ export default function ProductPerformance() {
   const [tab, setTab]                   = useState<TabType>('summary')
   const [cadenceMetric, setCadenceMetric] = useState<CadenceMetric>('units')
   const [cadenceGrouping, setCadenceGrouping] = useState<CadenceGrouping>('week')
+  const [cadenceLimit, setCadenceLimit] = useState(50)
 
   const PAGE_SIZE = 50
 
@@ -220,6 +221,7 @@ export default function ProductPerformance() {
       setLoading(true)
       setExpandedSku(null)
       setAllPeriodData({})
+      setCadenceLimit(50)
       setPage(0)
 
       // Server-side per-SKU aggregation — one row per SKU (revenue already in
@@ -287,16 +289,20 @@ export default function ProductPerformance() {
   }, [expandedSku, dateRange, markets])
 
   useEffect(() => {
-    if (tab !== 'cadence' || !dateRange) return
+    if (tab !== 'cadence' || !dateRange || loading || products.length === 0) return
     let cancelled = false
     setCadenceLoading(true)
+    const cadenceSkus = [...products]
+      .sort((left, right) => cadenceMetric === 'units' ? right.units - left.units : right.revenue - left.revenue)
+      .slice(0, cadenceLimit)
+      .map(product => product.sku)
     supabase.rpc('get_sku_sales', {
       p_start: dateRange.startDate,
       p_end: dateRange.endDate,
       p_prior_start: dateRange.priorStart,
       p_prior_end: dateRange.priorEnd,
       p_markets: markets,
-      p_skus: selectedProducts.length ? selectedProducts.map(product => product.sku) : null,
+      p_skus: cadenceSkus,
     }).then(({ data, error }) => {
       if (cancelled) return
       if (error) { console.error(error); setCadenceLoading(false); return }
@@ -313,7 +319,7 @@ export default function ProductPerformance() {
       setCadenceLoading(false)
     })
     return () => { cancelled = true }
-  }, [tab, dateRange, markets, selectedProducts])
+  }, [tab, dateRange, markets, products, cadenceMetric, cadenceLimit, loading])
 
   // ─── Re-bucket daily data into chosen grouping ───────────────
   const getBucketedData = useCallback((sku: string): DataPoint[] => {
@@ -365,6 +371,7 @@ export default function ProductPerformance() {
     .sort()
 
   const cadenceRows = filtered
+    .filter(p => allPeriodData[p.sku] !== undefined)
     .map(p => {
       const bucketed = getBucketedData(p.sku)
       const byPeriod: Record<string, DataPoint> = {}
@@ -479,7 +486,7 @@ export default function ProductPerformance() {
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0', marginBottom: '16px', borderBottom: '1px solid var(--border)' }}>
         {(['summary', 'cadence'] as TabType[]).map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{
+          <button key={t} onClick={() => { setTab(t); if (t === 'cadence' && tab !== 'cadence') setCadenceLimit(50) }} style={{
             padding: '8px 20px', fontSize: '13px', fontWeight: 500,
             background: 'transparent', border: 'none', cursor: 'pointer',
             borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
@@ -925,6 +932,16 @@ export default function ProductPerformance() {
               <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>No products found</div>
             )}
           </div>
+          {!cadenceLoading && cadenceRows.length < filtered.length && (
+            <div style={{ textAlign: 'center', marginTop: '16px' }}>
+              <button
+                onClick={() => setCadenceLimit(limit => limit + 50)}
+                style={{ padding: '8px 24px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}
+              >
+                Load 50 more — showing {cadenceRows.length} of {filtered.length}
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
