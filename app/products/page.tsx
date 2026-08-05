@@ -290,23 +290,24 @@ export default function ProductPerformance() {
     if (tab !== 'cadence' || !dateRange) return
     let cancelled = false
     setCadenceLoading(true)
-    supabase.rpc('get_sku_sales_cadence', {
+    supabase.rpc('get_sku_sales', {
       p_start: dateRange.startDate,
       p_end: dateRange.endDate,
+      p_prior_start: dateRange.priorStart,
+      p_prior_end: dateRange.priorEnd,
       p_markets: markets,
       p_skus: selectedProducts.length ? selectedProducts.map(product => product.sku) : null,
     }).then(({ data, error }) => {
       if (cancelled) return
       if (error) { console.error(error); setCadenceLoading(false); return }
       const cadenceBySku: Record<string, DataPoint[]> = {}
-      for (const point of (data || []) as any[]) {
-        if (!cadenceBySku[point.sku]) cadenceBySku[point.sku] = []
-        cadenceBySku[point.sku].push({
+      for (const row of (data || []) as any[]) {
+        cadenceBySku[row.sku] = ((row.series as any[]) || []).map(point => ({
           period_key: point.d,
           label: new Date(point.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
           revenue: Math.round(Number(point.revenue) || 0),
           units: Number(point.units) || 0,
-        })
+        }))
       }
       setAllPeriodData(cadenceBySku)
       setCadenceLoading(false)
