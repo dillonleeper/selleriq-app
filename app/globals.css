@@ -176,6 +176,14 @@ table tbody td {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+@keyframes cadenceSpin {
+  to { transform: rotate(360deg); }
+}
+
+.cadence-loading-spinner {
+  animation: cadenceSpin 0.9s linear infinite;
+}
 .fade-up { animation: fadeUp 0.35s ease forwards; }
 .fade-up-delay-1 { animation-delay: 0.04s; opacity: 0; }
 .fade-up-delay-2 { animation-delay: 0.08s; opacity: 0; }

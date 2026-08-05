@@ -11,7 +11,7 @@ import {
 } from 'recharts'
 import {
   ChevronDown, ChevronRight, TrendingUp, TrendingDown,
-  Minus, ArrowUpDown, ArrowUp, ArrowDown, Search, Download, X
+  Minus, ArrowUpDown, ArrowUp, ArrowDown, Search, Download, X, LoaderCircle
 } from 'lucide-react'
 
 type CadenceGrouping = 'day' | 'week' | 'month'
@@ -819,12 +819,34 @@ export default function ProductPerformance() {
             </span>
           </div>
 
-          <div className="card" style={{ overflow: 'hidden' }}>
+          <div className="card" style={{ overflow: 'hidden', position: 'relative', minHeight: cadenceLoading ? '360px' : undefined }}>
+            {cadenceLoading && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  position: 'absolute', inset: 0, zIndex: 30,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  background: 'color-mix(in srgb, var(--bg-card) 94%, transparent)',
+                  backdropFilter: 'blur(2px)',
+                }}
+              >
+                <div style={{ width: '52px', height: '52px', borderRadius: '14px', display: 'grid', placeItems: 'center', background: 'var(--accent-light)', color: 'var(--accent)', marginBottom: '16px' }}>
+                  <LoaderCircle className="cadence-loading-spinner" size={28} strokeWidth={2.25} />
+                </div>
+                <div style={{ fontSize: '15px', fontWeight: 650, color: 'var(--text-primary)', marginBottom: '6px' }}>Loading cadence history</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '360px', lineHeight: 1.5 }}>
+                  Building the {cadenceGrouping} view for {products.length.toLocaleString()} products. Long date ranges may take a few seconds.
+                </div>
+              </div>
+            )}
             <div
               className="cadence-scroll"
               style={{
                 overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh',
                 scrollbarWidth: 'auto', scrollbarColor: 'var(--accent) var(--bg-hover)',
+                opacity: cadenceLoading ? 0.18 : 1,
+                pointerEvents: cadenceLoading ? 'none' : 'auto',
               }}
             >
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: `${300 + allPeriods.length * 80}px` }}>
