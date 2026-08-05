@@ -1,4 +1,6 @@
 import type { Metadata } from 'next'
+import { Analytics } from '@vercel/analytics/next'
+import { SpeedInsights } from '@vercel/speed-insights/next'
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
 import { ThemeProvider } from '@/context/ThemeContext'
@@ -27,6 +29,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </div>
             </main>
           </div>
+          <Analytics />
+          <SpeedInsights />
         </ThemeProvider>
       </body>
     </html>
