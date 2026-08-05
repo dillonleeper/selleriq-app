@@ -24,6 +24,7 @@ const SUPPLIER_SHIP_DEFAULT   = 28
 const SUPPLIER_BUFFER_DEFAULT = 60
 const MAX_FORECAST_DAYS       = 365
 const FORECAST_HISTORY_DAYS   = 14
+const TABLE_PAGE_SIZE         = 100
 
 type TabType = 'inventory' | 'fba' | 'supplier'
 
@@ -539,10 +540,14 @@ export default function Inventory() {
   const [fbaFilter, setFbaFilter]     = useState<string>('all')
   const [supFilter, setSupFilter]     = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
+  const [snapshotDates, setSnapshotDates] = useState<Record<string, string>>({})
   const [salesHistoryBySkuMarket, setSalesHistoryBySkuMarket] = useState<Record<string, SalesHistoryPoint[]>>({})
   const [salesHistoryBySkuOnly, setSalesHistoryBySkuOnly] = useState<Record<string, SalesHistoryPoint[]>>({})
   const [expandedFbaSku, setExpandedFbaSku]   = useState<string | null>(null)
   const [expandedSupSku, setExpandedSupSku]   = useState<string | null>(null)
+  const [inventoryPage, setInventoryPage]     = useState(0)
+  const [fbaPage, setFbaPage]                 = useState(0)
+  const [supplierPage, setSupplierPage]       = useState(0)
 
   // Search state — checkbox multi-select (same pattern as Sales Overview)
   const [searchQuery, setSearchQuery]       = useState('')
@@ -759,25 +764,34 @@ export default function Inventory() {
     async function load() {
       setLoading(true)
 
-      const { data: snapDates } = await supabase
-        .from('fct_inventory_snapshot_daily')
-        .select('snapshot_date, marketplace')
-        .in('marketplace', markets)
-        .order('snapshot_date', { ascending: false })
-        .limit(10)
+      const latestSnapshots = (await Promise.all(markets.map(async marketplace => {
+        const { data, error } = await supabase
+          .from('fct_inventory_snapshot_daily')
+          .select('snapshot_date')
+          .eq('marketplace', marketplace)
+          .order('snapshot_date', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (error) throw error
+        return data?.snapshot_date ? { marketplace, snapshotDate: data.snapshot_date } : null
+      }))).filter((snapshot): snapshot is { marketplace: string; snapshotDate: string } => snapshot !== null)
 
-      if (!snapDates?.length) { setLoading(false); return }
-      const latestDate = snapDates[0].snapshot_date
-      setSnapshotDate(latestDate)
+      if (!latestSnapshots.length) { setLoading(false); return }
+      const datesByMarket = Object.fromEntries(latestSnapshots.map(snapshot => [snapshot.marketplace, snapshot.snapshotDate]))
+      setSnapshotDates(datesByMarket)
+      setSnapshotDate(latestSnapshots.map(snapshot => snapshot.snapshotDate).sort()[0])
 
-      const { data: invData, error: invError } = await supabase
-        .from('fct_inventory_snapshot_daily')
-        .select('sku, asin, fnsku, marketplace, snapshot_date, fulfillable_quantity, available_quantity, reserved_quantity, total_inbound_quantity, unsellable_quantity, researching_quantity, reserved_customerorders, reserved_fc_transfers, reserved_fc_processing')
-        .in('marketplace', markets)
-        .eq('snapshot_date', latestDate)
-        .limit(5000)
-
-      if (invError) { console.error(invError); setLoading(false); return }
+      const inventoryResults = await Promise.all(latestSnapshots.map(snapshot =>
+        supabase
+          .from('fct_inventory_snapshot_daily')
+          .select('sku, asin, fnsku, marketplace, snapshot_date, fulfillable_quantity, available_quantity, reserved_quantity, total_inbound_quantity, unsellable_quantity, researching_quantity, reserved_customerorders, reserved_fc_transfers, reserved_fc_processing')
+          .eq('marketplace', snapshot.marketplace)
+          .eq('snapshot_date', snapshot.snapshotDate)
+          .limit(5000),
+      ))
+      const inventoryError = inventoryResults.find(result => result.error)?.error
+      if (inventoryError) { console.error(inventoryError); setLoading(false); return }
+      const invData = inventoryResults.flatMap(result => result.data || [])
 
       const thirtyDaysAgo = new Date()
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 37)
@@ -831,10 +845,13 @@ export default function Inventory() {
       }
 
       const skus = [...new Set((invData || []).map(r => r.sku).filter(Boolean))]
-      const { data: productData } = await supabase
-        .from('dim_product')
-        .select('sku, title, marketplace')
-        .in('sku', skus.slice(0, 500))
+      const skuBatches = Array.from({ length: Math.ceil(skus.length / 500) }, (_, index) =>
+        skus.slice(index * 500, (index + 1) * 500),
+      )
+      const productResults = await Promise.all(skuBatches.map(batch =>
+        supabase.from('dim_product').select('sku, title, marketplace').in('sku', batch),
+      ))
+      const productData = productResults.flatMap(result => result.data || [])
 
       const titleBySku: Record<string, string> = {}
       for (const p of productData || []) {
@@ -905,14 +922,17 @@ export default function Inventory() {
 
   // ─── Sort helpers ─────────────────────────────────────────
   const handleSort = (key: SortKey) => {
+    setInventoryPage(0)
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('asc') }
   }
   const handleFbaSort = (key: FbaSortKey) => {
+    setFbaPage(0)
     if (fbaSortKey === key) setFbaSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setFbaSortKey(key); setFbaSortDir('asc') }
   }
   const handleSupSort = (key: SupplierSortKey) => {
+    setSupplierPage(0)
     if (supSortKey === key) setSupSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSupSortKey(key); setSupSortDir('asc') }
   }
@@ -929,6 +949,7 @@ export default function Inventory() {
       if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv as string) : (bv as string).localeCompare(av)
       return sortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
     })
+  const visibleInventoryRows = filtered.slice(0, (inventoryPage + 1) * TABLE_PAGE_SIZE)
 
   // ─── FBA rows ─────────────────────────────────────────────
   const fbaRows: FbaReplenRow[] = inventory
@@ -964,6 +985,7 @@ export default function Inventory() {
       if (typeof av === 'string') return fbaSortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
       return fbaSortDir === 'asc' ? av - bv : bv - av
     })
+  const visibleFbaRows = fbaRows.slice(0, (fbaPage + 1) * TABLE_PAGE_SIZE)
 
   // ─── Active warehouses (single source of truth for build + render) ──
   // A warehouse is active iff at least one SKU has qty > 0 for it. Derived,
@@ -1039,6 +1061,7 @@ export default function Inventory() {
       if (typeof av === 'string') return supSortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
       return supSortDir === 'asc' ? av - bv : bv - av
     })
+  const visibleSupplierRows = supplierRows.slice(0, (supplierPage + 1) * TABLE_PAGE_SIZE)
 
   // ─── Urgency counts ───────────────────────────────────────
   const fbaUrgencyCounts = fbaRows.reduce((acc, r) => { acc[r.urgency] = (acc[r.urgency] || 0) + 1; return acc }, {} as Record<string, number>)
@@ -1065,7 +1088,9 @@ export default function Inventory() {
         <div>
           <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Inventory</h1>
           <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            Snapshot date: <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{snapshotDate || '—'}</span>
+            Snapshot date: <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>
+              {markets.map(marketplace => snapshotDates[marketplace] ? `${marketplace} ${snapshotDates[marketplace]}` : null).filter(Boolean).join(' · ') || '—'}
+            </span>
             {snapshotDate && (() => {
               const rel = relativeTime(snapshotDate)
               const snap = new Date(`${snapshotDate}T00:00:00`)
@@ -1219,7 +1244,7 @@ export default function Inventory() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map(row => {
+                      {visibleInventoryRows.map(row => {
                         const sc = STATUS_CONFIG[row.status]
                         return (
                           <tr key={`${row.sku}-${row.marketplace}`} style={{ borderBottom: '1px solid var(--border)' }}
@@ -1253,6 +1278,13 @@ export default function Inventory() {
                   {filtered.length === 0 && <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>No inventory data found</div>}
                 </div>
               </div>
+              {visibleInventoryRows.length < filtered.length && (
+                <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                  <button onClick={() => setInventoryPage(page => page + 1)} style={{ padding: '8px 24px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
+                    Load more — showing {visibleInventoryRows.length} of {filtered.length}
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -1386,7 +1418,7 @@ export default function Inventory() {
                       </tr>
                     </thead>
                     <tbody>
-                      {fbaRows.map(row => {
+                      {visibleFbaRows.map(row => {
                         const uc = URGENCY_CONFIG[row.urgency]
                         const isExpanded = expandedFbaSku === `${row.sku}-${row.marketplace}`
                         const reorderThreshold = row.avg_daily_units * supplierLeadDays
@@ -1458,6 +1490,13 @@ export default function Inventory() {
                   {fbaRows.length === 0 && <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>All SKUs have sufficient FBA coverage 🎉</div>}
                 </div>
               </div>
+              {visibleFbaRows.length < fbaRows.length && (
+                <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                  <button onClick={() => setFbaPage(page => page + 1)} style={{ padding: '8px 24px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
+                    Load more — showing {visibleFbaRows.length} of {fbaRows.length}
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -1657,7 +1696,7 @@ export default function Inventory() {
                       </tr>
                     </thead>
                     <tbody>
-                      {supplierRows.map(row => {
+                      {visibleSupplierRows.map(row => {
                         const uc = URGENCY_CONFIG[row.urgency]
                         const isExpanded = expandedSupSku === row.sku
                         const leadThreshold = row.avg_daily_units * supplierLeadDays
@@ -1747,6 +1786,13 @@ export default function Inventory() {
                   {supplierRows.length === 0 && <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>All SKUs have sufficient inventory coverage 🎉</div>}
                 </div>
               </div>
+              {visibleSupplierRows.length < supplierRows.length && (
+                <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                  <button onClick={() => setSupplierPage(page => page + 1)} style={{ padding: '8px 24px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
+                    Load more — showing {visibleSupplierRows.length} of {supplierRows.length}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </>
