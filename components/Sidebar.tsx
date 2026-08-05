@@ -1,15 +1,16 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { useTheme } from '@/context/ThemeContext'
 import {
-  BarChart2, Package, Boxes, GitCompare, TrendingUp, Sun, Moon, LogOut
+  BarChart2, Package, Boxes, GitCompare, TrendingUp, Sun, Moon, LogOut, CircleDollarSign
 } from 'lucide-react'
 
 const nav = [
   { href: '/',          label: 'Sales Overview',       icon: BarChart2  },
   { href: '/products',  label: 'Product Performance',  icon: Package    },
+  { href: '/profitability', label: 'Profitability',     icon: CircleDollarSign },
   { href: '/inventory', label: 'Inventory',            icon: Boxes      },
   { href: '/compare',   label: 'Marketplace Compare',  icon: GitCompare },
   { href: '/traffic',   label: 'Traffic & Conversion', icon: TrendingUp },
@@ -40,7 +41,6 @@ function OrbitLogo() {
 
 export default function Sidebar() {
   const pathname = usePathname()
-  const router = useRouter()
   const { theme, toggle } = useTheme()
   const isDark = theme === 'dark'
   const isLight = theme === 'light'
