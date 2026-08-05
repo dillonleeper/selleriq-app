@@ -135,6 +135,7 @@ export default function ProductPerformance() {
   const [products, setProducts]         = useState<ProductRow[]>([])
   const [allPeriodData, setAllPeriodData] = useState<Record<string, DataPoint[]>>({})
   const [loading, setLoading]           = useState(true)
+  const [cadenceLoading, setCadenceLoading] = useState(false)
   const [expandedSku, setExpandedSku]   = useState<string | null>(null)
   const [sortKey, setSortKey]           = useState<SortKey>('revenue')
   const [sortDir, setSortDir]           = useState<SortDir>('desc')
@@ -218,6 +219,7 @@ export default function ProductPerformance() {
       const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
       setExpandedSku(null)
+      setAllPeriodData({})
       setPage(0)
 
       // Server-side per-SKU aggregation — one row per SKU (revenue already in
@@ -256,7 +258,6 @@ export default function ProductPerformance() {
       }
 
       setProducts(rows)
-      setAllPeriodData({})
       setLoading(false)
     }
     load()
@@ -284,6 +285,34 @@ export default function ProductPerformance() {
     })
     return () => { cancelled = true }
   }, [expandedSku, dateRange, markets])
+
+  useEffect(() => {
+    if (tab !== 'cadence' || !dateRange) return
+    let cancelled = false
+    setCadenceLoading(true)
+    supabase.rpc('get_sku_sales_cadence', {
+      p_start: dateRange.startDate,
+      p_end: dateRange.endDate,
+      p_markets: markets,
+      p_skus: selectedProducts.length ? selectedProducts.map(product => product.sku) : null,
+    }).then(({ data, error }) => {
+      if (cancelled) return
+      if (error) { console.error(error); setCadenceLoading(false); return }
+      const cadenceBySku: Record<string, DataPoint[]> = {}
+      for (const point of (data || []) as any[]) {
+        if (!cadenceBySku[point.sku]) cadenceBySku[point.sku] = []
+        cadenceBySku[point.sku].push({
+          period_key: point.d,
+          label: new Date(point.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          revenue: Math.round(Number(point.revenue) || 0),
+          units: Number(point.units) || 0,
+        })
+      }
+      setAllPeriodData(cadenceBySku)
+      setCadenceLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [tab, dateRange, markets, selectedProducts])
 
   // ─── Re-bucket daily data into chosen grouping ───────────────
   const getBucketedData = useCallback((sku: string): DataPoint[] => {
@@ -785,7 +814,7 @@ export default function ProductPerformance() {
             </div>
 
             <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace', marginLeft: 'auto' }}>
-              {allPeriods.length} {cadenceGrouping}s · {cadenceRows.length} SKUs
+              {cadenceLoading ? 'Loading cadence history…' : `${allPeriods.length} ${cadenceGrouping}s · ${cadenceRows.length} SKUs`}
             </span>
           </div>
 

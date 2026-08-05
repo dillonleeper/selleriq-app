@@ -219,8 +219,36 @@ as $function$
   order by f.start_date;
 $function$;
 
+create or replace function public.get_sku_sales_cadence(
+  p_start date,
+  p_end date,
+  p_markets text[],
+  p_skus text[] default null
+)
+returns table (
+  sku text, d date, units numeric, revenue numeric
+)
+language sql
+stable
+as $function$
+  select
+    f.sku,
+    f.start_date,
+    sum(f.units_ordered)::numeric,
+    sum(case when f.marketplace = 'CA' then f.ordered_product_sales_amount * 0.74
+             else f.ordered_product_sales_amount end)::numeric
+  from public.fct_sales_daily f
+  where f.sku is not null
+    and f.marketplace = any (p_markets)
+    and (p_skus is null or f.sku = any (p_skus))
+    and f.start_date between p_start and p_end
+  group by f.sku, f.start_date
+  order by f.sku, f.start_date;
+$function$;
+
 grant execute on function public.search_products(text, integer) to anon, authenticated;
 grant execute on function public.get_sales_overview(date, date, date, date, text[], text[]) to anon, authenticated;
 grant execute on function public.get_inventory_sales_velocity(date, text[]) to anon, authenticated;
 grant execute on function public.get_sku_sales_summary(date, date, date, date, text[], text[]) to anon, authenticated;
 grant execute on function public.get_sku_sales_series(date, date, text[], text) to anon, authenticated;
+grant execute on function public.get_sku_sales_cadence(date, date, text[], text[]) to anon, authenticated;
