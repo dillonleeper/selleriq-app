@@ -834,8 +834,9 @@ export default function ProductPerformance() {
                 style={{
                   position: 'absolute', inset: 0, zIndex: 30,
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  background: 'color-mix(in srgb, var(--bg-card) 94%, transparent)',
-                  backdropFilter: 'blur(2px)',
+                  background: 'color-mix(in srgb, var(--bg-card) 42%, transparent)',
+                  backdropFilter: 'blur(10px) saturate(0.85)',
+                  WebkitBackdropFilter: 'blur(10px) saturate(0.85)',
                 }}
               >
                 <div style={{ width: '52px', height: '52px', borderRadius: '14px', display: 'grid', placeItems: 'center', background: 'var(--accent-light)', color: 'var(--accent)', marginBottom: '16px' }}>
@@ -843,7 +844,7 @@ export default function ProductPerformance() {
                 </div>
                 <div style={{ fontSize: '15px', fontWeight: 650, color: 'var(--text-primary)', marginBottom: '6px' }}>Loading cadence history</div>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '360px', lineHeight: 1.5 }}>
-                  Building the {cadenceGrouping} view for {products.length.toLocaleString()} products. Long date ranges may take a few seconds.
+                  Building the {cadenceGrouping} view for the first {Math.min(cadenceLimit, products.length).toLocaleString()} of {products.length.toLocaleString()} products. Long date ranges may take a few seconds.
                 </div>
               </div>
             )}
@@ -852,7 +853,7 @@ export default function ProductPerformance() {
               style={{
                 overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh',
                 scrollbarWidth: 'auto', scrollbarColor: 'var(--accent) var(--bg-hover)',
-                opacity: cadenceLoading ? 0.18 : 1,
+                opacity: cadenceLoading ? 0.58 : 1,
                 pointerEvents: cadenceLoading ? 'none' : 'auto',
               }}
             >
