@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import {
@@ -169,18 +170,14 @@ export default function TrafficConversion() {
 
   useEffect(() => {
     if (searchQuery.length < 2) { setSearchResults([]); setShowDropdown(false); return }
+    let cancelled = false
     const timer = setTimeout(async () => {
-      const q = searchQuery.toLowerCase()
-      const { data } = await supabase
-        .from('dim_product').select('sku, asin, title')
-        .or(`sku.ilike.%${q}%,asin.ilike.%${q}%,title.ilike.%${q}%`).limit(20)
-      if (data) {
-        const seen = new Set<string>()
-        setSearchResults(data.filter(p => { if (!p.sku || seen.has(p.sku)) return false; seen.add(p.sku); return true }))
-        setShowDropdown(true)
-      }
+      try {
+        const data = await searchProducts(searchQuery)
+        if (!cancelled) { setSearchResults(data); setShowDropdown(true) }
+      } catch (error) { if (!cancelled) console.error(error) }
     }, 200)
-    return () => clearTimeout(timer)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [searchQuery])
 
   const allChecked = searchResults.length > 0 && searchResults.every(p => selectedProducts.find(s => s.sku === p.sku))
@@ -206,16 +203,11 @@ export default function TrafficConversion() {
 
   const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchQuery.length >= 2) {
-      const q = searchQuery.toLowerCase()
-      const { data } = await supabase
-        .from('dim_product').select('sku, asin, title')
-        .or(`sku.ilike.%${q}%,asin.ilike.%${q}%,title.ilike.%${q}%`).limit(500)
-      if (data) {
-        const seen = new Set<string>()
-        const unique = data.filter(p => { if (!p.sku || seen.has(p.sku)) return false; seen.add(p.sku); return true })
-        const toAdd = unique.filter(p => !selectedProducts.find(s => s.sku === p.sku))
+      try {
+        const data = await searchProducts(searchQuery, 500)
+        const toAdd = data.filter(p => !selectedProducts.find(s => s.sku === p.sku))
         setSelectedProducts(prev => [...prev, ...toAdd])
-      }
+      } catch (error) { console.error(error) }
       setSearchQuery(''); setShowDropdown(false)
     }
     if (e.key === 'Escape') setShowDropdown(false)
@@ -226,6 +218,7 @@ export default function TrafficConversion() {
 
   useEffect(() => {
     if (!dateRange || !dateRange.startDate) return
+    let cancelled = false
     async function load() {
       const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
@@ -234,18 +227,18 @@ export default function TrafficConversion() {
 
       // Server-side per-SKU aggregation â€” one row per SKU, so this never
       // truncates at a daily-grain row cap the way the old raw fetch did.
-      const { data, error } = await supabase.rpc('get_sku_sales', {
+      const { data, error } = await supabase.rpc('get_sku_sales_summary', {
         p_start: startDate,
         p_end: endDate,
         p_prior_start: priorStart,
         p_prior_end: priorEnd,
         p_markets: markets,
-        p_skus: null,
+        p_skus: selectedProducts.length ? selectedProducts.map(product => product.sku) : null,
       })
+      if (cancelled) return
       if (error) { console.error(error); setLoading(false); return }
 
       const rows: ProductRow[] = []
-      const sortedWeekly: Record<string, WeeklyPoint[]> = {}
 
       for (const r of (data || []) as any[]) {
         const sessions = Number(r.sessions) || 0
@@ -270,22 +263,38 @@ export default function TrafficConversion() {
           health: classifyHealth(sessions, conv, bb),
         })
 
-        // series arrives sorted by day ascending from the RPC
-        sortedWeekly[r.sku] = ((r.series as any[]) || []).map(pt => ({
-          raw_date: pt.d,
-          start_date: new Date(pt.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          sessions: Number(pt.sessions) || 0,
-          conv_rate: Number(pt.conv_rate) || 0,
-          buy_box_pct: pt.buy_box_pct != null ? Number(pt.buy_box_pct) : 0,
-        }))
       }
 
       setProducts(rows)
-      setAllWeeklyData(sortedWeekly)
+      setAllWeeklyData({})
       setLoading(false)
     }
     load()
-  }, [markets, dateRange])
+    return () => { cancelled = true }
+  }, [markets, dateRange, selectedProducts])
+
+  useEffect(() => {
+    if (!expandedSku || !dateRange) return
+    let cancelled = false
+    supabase.rpc('get_sku_sales_series', {
+      p_start: dateRange.startDate,
+      p_end: dateRange.endDate,
+      p_markets: markets,
+      p_sku: expandedSku,
+    }).then(({ data, error }) => {
+      if (cancelled) return
+      if (error) { console.error(error); return }
+      const points: WeeklyPoint[] = ((data || []) as any[]).map(point => ({
+        raw_date: point.d,
+        start_date: new Date(point.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        sessions: Number(point.sessions) || 0,
+        conv_rate: Number(point.conv_rate) || 0,
+        buy_box_pct: point.buy_box_pct != null ? Number(point.buy_box_pct) : 0,
+      }))
+      setAllWeeklyData(previous => ({ ...previous, [expandedSku]: points }))
+    })
+    return () => { cancelled = true }
+  }, [expandedSku, dateRange, markets])
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -320,442 +329,4 @@ export default function TrafficConversion() {
 
   const exportCSV = () => {
     const headers = ['Rank', 'SKU', 'Title', 'Sessions', 'Page Views', 'Views/Session', 'Buy Box %', 'Conv %', 'Units', 'Conv Change (pp)', 'Health']
-    const rows = filtered.map((p, i) => [
-      i + 1, p.sku, `"${p.title.replace(/"/g, '""')}"`,
-      p.sessions, p.page_views, p.views_per_session.toFixed(2),
-      p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) : '',
-      p.conv_rate.toFixed(2),
-      p.units,
-      p.conv_change !== null ? p.conv_change.toFixed(2) : '',
-      HEALTH_META[p.health].label,
-    ])
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `selleriq-traffic-${dateRange ? dateRange.preset : 'range'}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const rangeLabel = dateRange ? PRESET_LABELS[dateRange.preset] : ''
-  const startDate = dateRange && dateRange.startDate ? fmtDateLabel(dateRange.startDate) : 'â€”'
-  const endDate = dateRange && dateRange.endDate ? fmtDateLabel(dateRange.endDate) : 'â€”'
-
-  const SortIcon = ({ col }: { col: SortKey }) => {
-    if (sortKey !== col) return <ArrowUpDown size={10} style={{ opacity: 0.3 }} />
-    return sortDir === 'desc' ? <ArrowDown size={10} /> : <ArrowUp size={10} />
-  }
-
-  const thBase: React.CSSProperties = {
-    padding: '10px 12px', fontSize: '10px', fontWeight: 600,
-    textTransform: 'uppercase', letterSpacing: '0.06em',
-    background: 'var(--bg-hover)', borderBottom: '1px solid var(--border)',
-    position: 'sticky', top: 0, zIndex: 10,
-    whiteSpace: 'nowrap',
-  }
-  const thSortable = (col: SortKey): React.CSSProperties => ({
-    ...thBase,
-    color: sortKey === col ? 'var(--accent)' : 'var(--text-muted)',
-    cursor: 'pointer', userSelect: 'none',
-  })
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-        <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Traffic & Conversion</h1>
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            Funnel diagnostics Â· {filtered.length} SKUs
-            {' Â· '}
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>
-              {startDate} â€” {endDate}
-            </span>
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button onClick={exportCSV} style={{
-            display: 'flex', alignItems: 'center', gap: '6px',
-            padding: '6px 12px', borderRadius: '7px',
-            border: '1px solid var(--border)', background: 'transparent',
-            color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer',
-            transition: 'all 0.12s ease',
-          }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)' }}
-          >
-            <Download size={12} /> Export CSV
-          </button>
-          <DateRangeFilter onChange={setDateRange} />
-          <MarketplaceFilter selected={markets} onChange={setMarkets} />
-        </div>
-      </div>
-
-      {/* Summary tiles */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px',
-        marginBottom: '20px',
-      }}>
-        {[
-          { label: 'Total Sessions', value: fmtUnits(totalSessions), sub: `${rangeLabel} window` },
-          { label: 'Avg Conversion', value: overallConv.toFixed(2) + '%', sub: 'session-weighted' },
-          { label: 'Avg Buy Box', value: overallBB !== null ? overallBB.toFixed(1) + '%' : 'â€”', sub: `${bbProducts.length} SKUs` },
-          { label: 'Needs Attention', value: needsAttentionCount.toString(), sub: 'flagged SKUs',
-            color: needsAttentionCount > 0 ? 'var(--red)' : 'var(--green)' },
-        ].map((tile, i) => (
-          <div key={i} className="card" style={{ padding: '16px' }}>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
-              {tile.label}
-            </div>
-            <div style={{
-              fontSize: '22px', fontWeight: 600,
-              fontFamily: 'JetBrains Mono, monospace',
-              color: (tile as any).color || 'var(--text-primary)',
-              marginBottom: '2px',
-            }}>
-              {tile.value}
-            </div>
-            <div style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{tile.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Health filter chips */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', alignItems: 'center' }}>
-        <span style={{ fontSize: '10px', color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: '4px' }}>
-          Filter
-        </span>
-        {([
-          { key: 'all', label: 'All' },
-          { key: 'needs_attention', label: 'Needs attention' },
-          { key: 'healthy', label: 'Healthy' },
-        ] as const).map(f => (
-          <button key={f.key} onClick={() => { setHealthFilter(f.key); setPage(0) }} style={{
-            padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
-            cursor: 'pointer', transition: 'all 0.12s ease',
-            border: healthFilter === f.key ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-            background: healthFilter === f.key ? 'var(--accent-light)' : 'transparent',
-            color: healthFilter === f.key ? 'var(--accent)' : 'var(--text-muted)',
-          }}>{f.label}</button>
-        ))}
-      </div>
-
-      {/* Search */}
-      <div ref={searchRef} style={{ position: 'relative', marginBottom: '16px' }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          background: 'var(--bg-card)', border: '1px solid var(--border)',
-          borderRadius: '10px', padding: '10px 14px',
-          boxShadow: 'var(--shadow-sm)',
-        }}>
-          <Search size={14} color="var(--text-muted)" />
-          <input
-            type="text"
-            placeholder="Search by SKU, ASIN, or product name â€” press Enter to add all results"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            onFocus={() => searchQuery.length >= 2 && setShowDropdown(true)}
-            onKeyDown={handleSearchKeyDown}
-            style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none',
-              color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'Inter, sans-serif',
-            }}
-          />
-          {selectedProducts.length > 0 && (
-            <button onClick={clearAll} style={{
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: 'var(--text-dim)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
-            }}>
-              <X size={11} /> Clear all
-            </button>
-          )}
-        </div>
-
-        {/* Dropdown */}
-        {showDropdown && searchResults.length > 0 && (
-          <div style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0,
-            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-            borderRadius: '10px', zIndex: 200, overflow: 'hidden',
-            boxShadow: 'var(--shadow-md)',
-          }}>
-            <div onClick={toggleAll} style={{
-              padding: '9px 14px', borderBottom: '1px solid var(--border)',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px',
-              background: 'var(--bg-hover)',
-            }}
-            onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--border)'}
-            onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}
-            >
-              <div style={{
-                width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0,
-                border: `1px solid ${allChecked || someChecked ? 'var(--accent)' : 'var(--border)'}`,
-                background: allChecked ? 'var(--accent)' : someChecked ? 'var(--accent-light)' : 'transparent',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {(allChecked || someChecked) && (
-                  <div style={{ width: '6px', height: '2px', background: allChecked ? 'white' : 'var(--accent)', borderRadius: '1px' }} />
-                )}
-              </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-                {allChecked ? 'Deselect all' : `Select all ${searchResults.length} results`}
-              </span>
-            </div>
-            {searchResults.map((p: any, i: number) => {
-              const isSelected = !!selectedProducts.find(s => s.sku === p.sku)
-              return (
-                <div key={i} onClick={() => toggleProduct(p)} style={{
-                  padding: '10px 14px',
-                  borderBottom: i < searchResults.length - 1 ? '1px solid var(--border)' : 'none',
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px',
-                  background: isSelected ? 'var(--accent-light)' : 'transparent',
-                  transition: 'background 0.1s ease',
-                }}
-                onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = isSelected ? 'var(--accent-light)' : 'transparent' }}
-                >
-                  <div style={{
-                    width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0,
-                    border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
-                    background: isSelected ? 'var(--accent)' : 'transparent',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'all 0.12s ease',
-                  }}>
-                    {isSelected && (
-                      <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
-                        <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    )}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '2px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.title ? truncate(p.title, 60) : p.sku}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>
-                      {p.sku} Â· {p.asin}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {/* Selected tags */}
-        {selectedProducts.length > 0 && (
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px', alignItems: 'center' }}>
-            {selectedProducts.length <= 3 ? (
-              selectedProducts.map(p => (
-                <div key={p.sku} style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  background: 'var(--accent-light)', border: '1px solid var(--accent-border)',
-                  borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--accent)',
-                }}>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{p.sku}</span>
-                  <button onClick={() => removeProduct(p.sku)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', display: 'flex', padding: 0 }}>
-                    <X size={10} />
-                  </button>
-                </div>
-              ))
-            ) : (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px',
-                background: 'var(--accent-light)', border: '1px solid var(--accent-border)',
-                borderRadius: '6px', padding: '5px 12px', fontSize: '12px', color: 'var(--accent)',
-              }}>
-                <span style={{ fontWeight: 500 }}>{selectedProducts.length} products selected</span>
-                <button onClick={clearAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', padding: 0 }}>
-                  <X size={10} /> Clear all
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
-      ) : (
-        <>
-          <div className="card" style={{ overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={{ ...thBase, width: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>#</th>
-                    <th style={{ ...thBase, textAlign: 'left', color: 'var(--text-muted)' }}>Product</th>
-                    <th style={{ ...thBase, width: '90px', textAlign: 'center', color: 'var(--text-muted)' }}>Health</th>
-                    <th style={{ ...thSortable('sessions'), textAlign: 'right' }} onClick={() => handleSort('sessions')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Sessions <SortIcon col="sessions" /></span>
-                    </th>
-                    <th style={{ ...thSortable('page_views'), textAlign: 'right' }} onClick={() => handleSort('page_views')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Views <SortIcon col="page_views" /></span>
-                    </th>
-                    <th style={{ ...thSortable('views_per_session'), textAlign: 'right' }} onClick={() => handleSort('views_per_session')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>V/S <SortIcon col="views_per_session" /></span>
-                    </th>
-                    <th style={{ ...thSortable('buy_box_pct'), textAlign: 'right' }} onClick={() => handleSort('buy_box_pct')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Buy Box <SortIcon col="buy_box_pct" /></span>
-                    </th>
-                    <th style={{ ...thSortable('conv_rate'), textAlign: 'right' }} onClick={() => handleSort('conv_rate')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Conv % <SortIcon col="conv_rate" /></span>
-                    </th>
-                    <th style={{ ...thSortable('units'), textAlign: 'right' }} onClick={() => handleSort('units')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Units <SortIcon col="units" /></span>
-                    </th>
-                    <th style={{ ...thSortable('conv_change'), textAlign: 'right' }} onClick={() => handleSort('conv_change')}>
-                      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Î” Conv <SortIcon col="conv_change" /></span>
-                    </th>
-                    <th style={{ ...thBase, width: '32px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paginated.map((p, i) => {
-                    const isExpanded = expandedSku === p.sku
-                    const weeklyData = allWeeklyData[p.sku] || []
-                    const meta = HEALTH_META[p.health]
-                    const HealthIcon = meta.icon
-                    return (
-                      <React.Fragment key={p.sku}>
-                        <tr
-                          onClick={() => setExpandedSku(isExpanded ? null : p.sku)}
-                          style={{
-                            cursor: 'pointer',
-                            background: isExpanded ? 'var(--accent-light)' : 'transparent',
-                            transition: 'background 0.1s ease',
-                            borderBottom: isExpanded ? 'none' : '1px solid var(--border)',
-                          }}
-                          onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)' }}
-                          onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'transparent' }}
-                        >
-                          <td style={{ padding: '11px 12px', textAlign: 'center', fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{i + 1}</td>
-                          <td style={{ padding: '11px 12px' }}>
-                            <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{truncate(p.title, 52)}</div>
-                            <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{p.sku}</div>
-                          </td>
-                          <td style={{ padding: '11px 12px', textAlign: 'center' }}>
-                            <span style={{
-                              display: 'inline-flex', alignItems: 'center', gap: '4px',
-                              padding: '3px 8px', borderRadius: '12px',
-                              background: meta.bg, color: meta.color,
-                              fontSize: '10px', fontWeight: 600,
-                            }}>
-                              <HealthIcon size={11} /> {meta.label}
-                            </span>
-                          </td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.sessions)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.page_views)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{p.views_per_session.toFixed(2)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: p.buy_box_pct !== null && p.buy_box_pct < BUY_BOX_WARN ? 'var(--red)' : p.buy_box_pct !== null && p.buy_box_pct >= BUY_BOX_OK ? 'var(--green)' : 'var(--text-primary)' }}>{p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : 'â€”'}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: p.conv_rate < LOW_CONV_THRESHOLD ? 'var(--red)' : p.conv_rate >= HEALTHY_CONV_THRESHOLD ? 'var(--green)' : 'var(--text-primary)' }}>{p.conv_rate.toFixed(1)}%</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-primary)' }}>{fmtUnits(p.units)}</td>
-                          <td style={{ padding: '11px 12px', textAlign: 'right' }}>
-                            {p.conv_change !== null ? (
-                              <span style={{ fontSize: '11px', fontWeight: 600, color: p.conv_change > 0 ? 'var(--green)' : p.conv_change < 0 ? 'var(--red)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '2px', fontFamily: 'JetBrains Mono, monospace' }}>
-                                {p.conv_change > 0 ? <TrendingUp size={10} /> : p.conv_change < 0 ? <TrendingDown size={10} /> : <Minus size={10} />}
-                                {p.conv_change > 0 ? '+' : ''}{p.conv_change.toFixed(1)}pp
-                              </span>
-                            ) : (
-                              <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>â€”</span>
-                            )}
-                          </td>
-                          <td style={{ padding: '11px 12px', textAlign: 'center', color: 'var(--text-dim)' }}>
-                            {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr key={p.sku + '-exp'} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td colSpan={11} style={{ padding: '0 20px 20px 20px', background: 'var(--accent-light)' }}>
-                              <div style={{ paddingTop: '16px' }}>
-                                {/* Diagnostic line */}
-                                <div style={{
-                                  padding: '12px 14px', marginBottom: '16px',
-                                  background: 'var(--bg-card)', border: `1px solid ${meta.color}`,
-                                  borderRadius: '8px', fontSize: '12px',
-                                  color: 'var(--text-primary)', display: 'flex', gap: '10px', alignItems: 'flex-start',
-                                }}>
-                                  <HealthIcon size={14} color={meta.color} style={{ marginTop: '1px', flexShrink: 0 }} />
-                                  <span>{diagnosticMessage(p)}</span>
-                                </div>
-
-                                {/* Funnel stats */}
-                                <div style={{ display: 'flex', gap: '28px', marginBottom: '20px', flexWrap: 'wrap' }}>
-                                  {[
-                                    { label: 'Sessions', value: fmtUnits(p.sessions) },
-                                    { label: 'Page Views', value: fmtUnits(p.page_views) },
-                                    { label: 'Views/Session', value: p.views_per_session.toFixed(2) },
-                                    { label: 'Buy Box', value: p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : 'â€”' },
-                                    { label: 'Conv Rate', value: p.conv_rate.toFixed(1) + '%' },
-                                    { label: 'Units', value: fmtUnits(p.units) },
-                                    ...(p.conv_change !== null ? [{ label: 'Î” Conv', value: (p.conv_change > 0 ? '+' : '') + p.conv_change.toFixed(2) + 'pp', color: p.conv_change > 0 ? 'var(--green)' : 'var(--red)' }] : []),
-                                  ].map((stat, idx) => (
-                                    <div key={idx}>
-                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>{stat.label}</div>
-                                      <div style={{ fontSize: '17px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: (stat as any).color || 'var(--text-primary)' }}>{stat.value}</div>
-                                    </div>
-                                  ))}
-                                </div>
-
-                                {/* Three sparklines side by side */}
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-                                  {[
-                                    { title: 'Sessions', dataKey: 'sessions' as const, color: 'var(--accent)' },
-                                    { title: 'Conversion %', dataKey: 'conv_rate' as const, color: 'var(--green)' },
-                                    { title: 'Buy Box %', dataKey: 'buy_box_pct' as const, color: '#d97706' },
-                                  ].map(chart => (
-                                    <div key={chart.dataKey} style={{ background: 'var(--bg-card)', borderRadius: '8px', padding: '12px', border: '1px solid var(--border)' }}>
-                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>{chart.title}</div>
-                                      <ResponsiveContainer width="100%" height={100}>
-                                        <AreaChart data={allWeeklyData[p.sku] || []}>
-                                          <defs>
-                                            <linearGradient id={`grad-${chart.dataKey}-${sanitizeId(p.sku)}`} x1="0" y1="0" x2="0" y2="1">
-                                              <stop offset="5%" stopColor={chart.color} stopOpacity={0.2} />
-                                              <stop offset="95%" stopColor={chart.color} stopOpacity={0} />
-                                            </linearGradient>
-                                          </defs>
-                                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                                          <XAxis dataKey="start_date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                                          <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} width={40} />
-                                          <Tooltip content={<CustomTooltip />} />
-                                          <Area type="monotone" dataKey={chart.dataKey} name={chart.title} stroke={chart.color} strokeWidth={1.5} fill={`url(#grad-${chart.dataKey}-${sanitizeId(p.sku)})`} dot={false} />
-                                        </AreaChart>
-                                      </ResponsiveContainer>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {filtered.length === 0 && (
-              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>No products found</div>
-            )}
-          </div>
-          {hasMore && (
-            <div style={{ textAlign: 'center', marginTop: '16px' }}>
-              <button onClick={() => setPage(p => p + 1)} style={{
-                padding: '8px 24px', borderRadius: '8px',
-                border: '1px solid var(--border)', background: 'var(--bg-card)',
-                color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer',
-                transition: 'all 0.12s ease',
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)' }}
-              >
-                Load more â€” showing {paginated.length} of {filtered.length}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
+    const rowsã4¶‰žËkºwµçh€ 4(€€€€€€€€ðø4(€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õíì½Ù•É™±½Üè€¡¥‘‘•¸œõôø4(€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì½Ù•É™±½Ý`è€…ÕÑ¼œõôø4(€€€€€€€€€€€€€€ñÑ…‰±”ÍÑå±”õíìÝ¥‘Ñ è€œÄÀÀ”œ°‰½É‘•É½±±…ÁÍ”è€½±±…ÁÍ”œõôø4(€€€€€€€€€€€€€€€€ñÑ¡•…ø4(€€€€€€€€€€€€€€€€€€ñÑÈø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡	…Í”°Ý¥‘Ñ è€œÌÙÁàœ°Ñ•áÑ±¥¸è€•¹Ñ•Èœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôøŒð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡	…Í”°Ñ•áÑ±¥¸è€±•™Ðœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôùAÉ½‘ÕÐð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡	…Í”°Ý¥‘Ñ è€œäÁÁàœ°Ñ•áÑ±¥¸è€•¹Ñ•Èœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôù!•…±Ñ ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” Í•ÍÍ¥½¹Ìœ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ Í•ÍÍ¥½¹Ìœ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôùM•ÍÍ¥½¹Ì€ñM½ÉÑ%½¸½°ô‰Í•ÍÍ¥½¹Ìˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” Á…•}Ù¥•ÝÌœ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ Á…•}Ù¥•ÝÌœ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôùY¥•ÝÌ€ñM½ÉÑ%½¸½°ô‰Á…•}Ù¥•ÝÌˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” Ù¥•ÝÍ}Á•É}Í•ÍÍ¥½¸œ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ Ù¥•ÝÍ}Á•É}Í•ÍÍ¥½¸œ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôùX½L€ñM½ÉÑ%½¸½°ô‰Ù¥•ÝÍ}Á•É}Í•ÍÍ¥½¸ˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” ‰Õå}‰½á}ÁÐœ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ ‰Õå}‰½á}ÁÐœ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôù	Õä	½à€ñM½ÉÑ%½¸½°ô‰‰Õå}‰½á}ÁÐˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” ½¹Ù}É…Ñ”œ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ ½¹Ù}É…Ñ”œ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôù½¹Ø€”€ñM½ÉÑ%½¸½°ô‰½¹Ù}É…Ñ”ˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” Õ¹¥ÑÌœ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ Õ¹¥ÑÌœ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôùU¹¥ÑÌ€ñM½ÉÑ%½¸½°ô‰Õ¹¥ÑÌˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡M½ÉÑ…‰±” ½¹Ù}¡…¹”œ¤°Ñ•áÑ±¥¸è€É¥¡Ðœõô½¹±¥¬õì ¤€ôø¡…¹‘±•M½ÉÐ ½¹Ù}¡…¹”œ¥ôø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€™±•àµ•¹œ°…Àè€œÑÁàœõôû:P½¹Ø€ñM½ÉÑ%½¸½°ô‰½¹Ù}¡…¹”ˆ€¼øð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€ð½Ñ ø4(€€€€€€€€€€€€€€€€€€€€ñÑ ÍÑå±”õíì€¸¸¹Ñ¡	…Í”°Ý¥‘Ñ è€œÌÉÁàœõôøð½Ñ ø4(€€€€€€€€€€€€€€€€€€ð½ÑÈø4(€€€€€€€€€€€€€€€€ð½Ñ¡•…ø4(€€€€€€€€€€€€€€€€ñÑ‰½‘äø4(€€€€€€€€€€€€€€€€€íÁ…¥¹…Ñ•¹µ…À ¡À°¤¤€ôøì4(€€€€€€€€€€€€€€€€€€€½¹ÍÐ¥ÍáÁ…¹‘•€ô•áÁ…¹‘•‘M­Ô€ôôôÀ¹Í­Ô4(€€€€€€€€€€€€€€€€€€€½¹ÍÐÝ••­±å…Ñ„€ô…±±]••­±å…Ñ…mÀ¹Í­Õtñðmt4(€€€€€€€€€€€€€€€€€€€½¹ÍÐµ•Ñ„€ô!1Q!}5QmÀ¹¡•…±Ñ¡t4(€€€€€€€€€€€€€€€€€€€½¹ÍÐ!•…±Ñ¡%½¸€ôµ•Ñ„¹¥½¸4(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸€ 4(€€€€€€€€€€€€€€€€€€€€€€ñI•…Ð¹É…µ•¹Ð­•äõíÀ¹Í­Õôø4(€€€€€€€€€€€€€€€€€€€€€€€€ñÑÈ4(€€€€€€€€€€€€€€€€€€€€€€€€€½¹±¥¬õì ¤€ôøÍ•ÑáÁ…¹‘•‘M­Ô¡¥ÍáÁ…¹‘•€ü¹Õ±°€èÀ¹Í­Ô¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€€ÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€€€€€ÕÉÍ½Èè€Á½¥¹Ñ•Èœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€‰…­É½Õ¹è¥ÍáÁ…¹‘•€ü€Ù…È ´µ…•¹Ðµ±¥¡Ð¤œ€è€ÑÉ…¹ÍÁ…É•¹Ðœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€ÑÉ…¹Í¥Ñ¥½¸è€‰…­É½Õ¹€À¸ÅÌ•…Í”œ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€‰½É‘•É	½ÑÑ½´è¥ÍáÁ…¹‘•€ü€¹½¹”œ€è€œÅÁàÍ½±¥Ù…È ´µ‰½É‘•È¤œ°4(€€€€€€€€€€€€€€€€€€€€€€€€€õô4(€€€€€€€€€€€€€€€€€€€€€€€€€½¹5½ÕÍ•¹Ñ•Èõí”€ôøì¥˜€ …¥ÍáÁ…¹‘•¤€¡”¹ÕÉÉ•¹ÑQ…É•Ð…Ì!Q51Q…‰±•I½Ý±•µ•¹Ð¤¹ÍÑå±”¹‰…­É½Õ¹€ô€Ù…È ´µ‰œµ¡½Ù•È¤œõô4(€€€€€€€€€€€€€€€€€€€€€€€€€½¹5½ÕÍ•1•…Ù”õí”€ôøì¥˜€ …¥ÍáÁ…¹‘•¤€¡”¹ÕÉÉ•¹ÑQ…É•Ð…Ì!Q51Q…‰±•I½Ý±•µ•¹Ð¤¹ÍÑå±”¹‰…­É½Õ¹€ô€ÑÉ…¹ÍÁ…É•¹Ðœõô4(€€€€€€€€€€€€€€€€€€€€€€€€ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€•¹Ñ•Èœ°™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œõôùí¤€¬€Åôð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œ°µ…É¥¹	½ÑÑ½´è€œÉÁàœõôùíÑÉÕ¹…Ñ”¡À¹Ñ¥Ñ±”°€ÔÈ¥ôð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÁÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œõôùíÀ¹Í­Õôð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€•¹Ñ•Èœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‘¥ÍÁ±…äè€¥¹±¥¹”µ™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÑÁàœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Á…‘‘¥¹œè€œÍÁà€áÁàœ°‰½É‘•ÉI…‘¥ÕÌè€œÄÉÁàœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰…­É½Õ¹èµ•Ñ„¹‰œ°½±½Èèµ•Ñ„¹½±½È°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€™½¹ÑM¥é”è€œÄÁÁàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ!•…±Ñ¡%½¸Í¥é”õìÄÅô€¼øíµ•Ñ„¹±…‰•±ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœ°™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùí™µÑU¹¥ÑÌ¡À¹Í•ÍÍ¥½¹Ì¥ôð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœ°™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùí™µÑU¹¥ÑÌ¡À¹Á…•}Ù¥•ÝÌ¥ôð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœ°™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùíÀ¹Ù¥•ÝÍ}Á•É}Í•ÍÍ¥½¸¹Ñ½¥á• È¥ôð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœ°™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½ÈèÀ¹‰Õå}‰½á}ÁÐ€„ôô¹Õ±°€˜˜À¹‰Õå}‰½á}ÁÐ€ð	Ue}	=a}]I8€ü€Ù…È ´µÉ•¤œ€èÀ¹‰Õå}‰½á}ÁÐ€„ôô¹Õ±°€˜˜À¹‰Õå}‰½á}ÁÐ€øô	Ue}	=a}=,€ü€Ù…È ´µÉ••¸¤œ€è€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùíÀ¹‰Õå}‰½á}ÁÐ€„ôô¹Õ±°€üÀ¹‰Õå}‰½á}ÁÐ¹Ñ½¥á• Ä¤€¬€œ”œ€è€ŸŠPôð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœ°™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½ÈèÀ¹½¹Ù}É…Ñ”€ð1=]}=9Y}Q!IM!=1€ü€Ù…È ´µÉ•¤œ€èÀ¹½¹Ù}É…Ñ”€øô!1Q!e}=9Y}Q!IM!=1€ü€Ù…È ´µÉ••¸¤œ€è€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùíÀ¹½¹Ù}É…Ñ”¹Ñ½¥á• Ä¥ô”ð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœ°™½¹ÑM¥é”è€œÄÉÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùí™µÑU¹¥ÑÌ¡À¹Õ¹¥ÑÌ¥ôð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€É¥¡Ðœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€íÀ¹½¹Ù}¡…¹”€„ôô¹Õ±°€ü€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°½±½ÈèÀ¹½¹Ù}¡…¹”€ø€À€ü€Ù…È ´µÉ••¸¤œ€èÀ¹½¹Ù}¡…¹”€ð€À€ü€Ù…È ´µÉ•¤œ€è€Ù…È ´µÑ•áÐµµÕÑ•¤œ°‘¥ÍÁ±…äè€¥¹±¥¹”µ™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÉÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€íÀ¹½¹Ù}¡…¹”€ø€À€ü€ñQÉ•¹‘¥¹UÀÍ¥é”õìÄÁô€¼ø€èÀ¹½¹Ù}¡…¹”€ð€À€ü€ñQÉ•¹‘¥¹½Ý¸Í¥é”õìÄÁô€¼ø€è€ñ5¥¹ÕÌÍ¥é”õìÄÁô€¼ùô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€íÀ¹½¹Ù}¡…¹”€ø€À€ü€œ¬œ€è€œõíÀ¹½¹Ù}¡…¹”¹Ñ½¥á• Ä¥õÁÀ4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤€è€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œõôûŠPð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÍÑå±”õíìÁ…‘‘¥¹œè€œÄÅÁà€ÄÉÁàœ°Ñ•áÑ±¥¸è€•¹Ñ•Èœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€í¥ÍáÁ…¹‘•€ü€ñ¡•ÙÉ½¹½Ý¸Í¥é”õìÄÍô€¼ø€è€ñ¡•ÙÉ½¹I¥¡ÐÍ¥é”õìÄÍô€¼ùô4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€ð½ÑÈø4(€€€€€€€€€€€€€€€€€€€€€€€í¥ÍáÁ…¹‘•€˜˜€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑÈ­•äõíÀ¹Í­Ô€¬€œµ•áÀôÍÑå±”õíì‰½É‘•É	½ÑÑ½´è€œÅÁàÍ½±¥Ù…È ´µ‰½É‘•È¤œõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÑ½±MÁ…¸õìÄÅôÍÑå±”õíìÁ…‘‘¥¹œè€œÀ€ÈÁÁà€ÈÁÁà€ÈÁÁàœ°‰…­É½Õ¹è€Ù…È ´µ…•¹Ðµ±¥¡Ð¤œõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìÁ…‘‘¥¹Q½Àè€œÄÙÁàœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì¼¨¥…¹½ÍÑ¥Œ±¥¹”€¨½ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Á…‘‘¥¹œè€œÄÉÁà€ÄÑÁàœ°µ…É¥¹	½ÑÑ½´è€œÄÙÁàœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰…­É½Õ¹è€Ù…È ´µ‰œµ…É¤œ°‰½É‘•Èè€ÅÁàÍ½±¥€‘íµ•Ñ„¹½±½Éõ€°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰½É‘•ÉI…‘¥ÕÌè€œáÁàœ°™½¹ÑM¥é”è€œÄÉÁàœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œ°‘¥ÍÁ±…äè€™±•àœ°…Àè€œÄÁÁàœ°…±¥¹%Ñ•µÌè€™±•àµÍÑ…ÉÐœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ!•…±Ñ¡%½¸Í¥é”õìÄÑô½±½Èõíµ•Ñ„¹½±½ÉôÍÑå±”õíìµ…É¥¹Q½Àè€œÅÁàœ°™±•áM¡É¥¹¬è€Àõô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ùí‘¥…¹½ÍÑ¥5•ÍÍ…”¡À¥ôð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì¼¨Õ¹¹•°ÍÑ…ÑÌ€¨½ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…Àè€œÈáÁàœ°µ…É¥¹	½ÑÑ½´è€œÈÁÁàœ°™±•á]É…Àè€ÝÉ…Àœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€íl4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì±…‰•°è€M•ÍÍ¥½¹Ìœ°Ù…±Õ”è™µÑU¹¥ÑÌ¡À¹Í•ÍÍ¥½¹Ì¤ô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì±…‰•°è€A…”Y¥•ÝÌœ°Ù…±Õ”è™µÑU¹¥ÑÌ¡À¹Á…•}Ù¥•ÝÌ¤ô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì±…‰•°è€Y¥•ÝÌ½M•ÍÍ¥½¸œ°Ù…±Õ”èÀ¹Ù¥•ÝÍ}Á•É}Í•ÍÍ¥½¸¹Ñ½¥á• È¤ô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì±…‰•°è€	Õä	½àœ°Ù…±Õ”èÀ¹‰Õå}‰½á}ÁÐ€„ôô¹Õ±°€üÀ¹‰Õå}‰½á}ÁÐ¹Ñ½¥á• Ä¤€¬€œ”œ€è€ŸŠPœô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì±…‰•°è€½¹ØI…Ñ”œ°Ù…±Õ”èÀ¹½¹Ù}É…Ñ”¹Ñ½¥á• Ä¤€¬€œ”œô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì±…‰•°è€U¹¥ÑÌœ°Ù…±Õ”è™µÑU¹¥ÑÌ¡À¹Õ¹¥ÑÌ¤ô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¸¸¸¡À¹½¹Ù}¡…¹”€„ôô¹Õ±°€ümì±…‰•°è€Ÿ:P½¹Øœ°Ù…±Õ”è€¡À¹½¹Ù}¡…¹”€ø€À€ü€œ¬œ€è€œœ¤€¬À¹½¹Ù}¡…¹”¹Ñ½¥á• È¤€¬€ÁÀœ°½±½ÈèÀ¹½¹Ù}¡…¹”€ø€À€ü€Ù…È ´µÉ••¸¤œ€è€Ù…È ´µÉ•¤œõt€èmt¤°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€t¹µ…À ¡ÍÑ…Ð°¥‘à¤€ôø€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥Ø­•äõí¥‘áôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÁÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°Ñ•áÑQÉ…¹Í™½É´è€ÕÁÁ•É…Í”œ°±•ÑÑ•ÉMÁ…¥¹œè€œÀ¸ÀÙ•´œ°µ…É¥¹	½ÑÑ½´è€œÍÁàœõôùíÍÑ…Ð¹±…‰•±ôð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÝÁàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°½±½Èè€¡ÍÑ…Ð…Ì…¹ä¤¹½±½Èñð€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œõôùíÍÑ…Ð¹Ù…±Õ•ôð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ì¼¨Q¡É•”ÍÁ…É­±¥¹•ÌÍ¥‘”‰äÍ¥‘”€¨½ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€É¥œ°É¥‘Q•µÁ±…Ñ•½±Õµ¹Ìè€É•Á•…Ð Ì°€Å™È¤œ°…Àè€œÄÙÁàœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€íl4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ìÑ¥Ñ±”è€M•ÍÍ¥½¹Ìœ°‘…Ñ…-•äè€Í•ÍÍ¥½¹Ìœ…Ì½¹ÍÐ°½±½Èè€Ù…È ´µ…•¹Ð¤œô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ìÑ¥Ñ±”è€½¹Ù•ÉÍ¥½¸€”œ°‘…Ñ…-•äè€½¹Ù}É…Ñ”œ…Ì½¹ÍÐ°½±½Èè€Ù…È ´µÉ••¸¤œô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ìÑ¥Ñ±”è€	Õä	½à€”œ°‘…Ñ…-•äè€‰Õå}‰½á}ÁÐœ…Ì½¹ÍÐ°½±½Èè€œäÜÜÀØœô°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€t¹µ…À¡¡…ÉÐ€ôø€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥Ø­•äõí¡…ÉÐ¹‘…Ñ…-•åôÍÑå±”õíì‰…­É½Õ¹è€Ù…È ´µ‰œµ…É¤œ°‰½É‘•ÉI…‘¥ÕÌè€œáÁàœ°Á…‘‘¥¹œè€œÄÉÁàœ°‰½É‘•Èè€œÅÁàÍ½±¥Ù…È ´µ‰½É‘•È¤œõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÁÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°Ñ•áÑQÉ…¹Í™½É´è€ÕÁÁ•É…Í”œ°±•ÑÑ•ÉMÁ…¥¹œè€œÀ¸ÀÙ•´œ°µ…É¥¹	½ÑÑ½´è€œáÁàœõôùí¡…ÉÐ¹Ñ¥Ñ±•ôð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñI•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•ÈÝ¥‘Ñ ôˆÄÀÀ”ˆ¡•¥¡ÐõìÄÀÁôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÉ•…¡…ÉÐ‘…Ñ„õí…±±]••­±å…Ñ…mÀ¹Í­Õtñðmuôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ‘•™Ìø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ±¥¹•…ÉÉ…‘¥•¹Ð¥õíÉ…´‘í¡…ÉÐ¹‘…Ñ…-•åô´‘íÍ…¹¥Ñ¥é•%¡À¹Í­Ô¥õôàÄôˆÀˆäÄôˆÀˆàÈôˆÀˆäÈôˆÄˆø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆÔ”ˆÍÑ½Á½±½Èõí¡…ÉÐ¹½±½ÉôÍÑ½Á=Á…¥ÑäõìÀ¸Éô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆäÔ”ˆÍÑ½Á½±½Èõí¡…ÉÐ¹½±½ÉôÍÑ½Á=Á…¥ÑäõìÁô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½±¥¹•…ÉÉ…‘¥•¹Ðø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘•™Ìø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñ…ÉÑ•Í¥…¹É¥ÍÑÉ½­•…Í¡…ÉÉ…äôˆÌ€ÌˆÍÑÉ½­”ô‰Ù…È ´µ‰½É‘•È¤ˆÙ•ÉÑ¥…°õí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñaá¥Ì‘…Ñ…-•äô‰ÍÑ…ÉÑ}‘…Ñ”ˆÑ¥¬õíì™½¹ÑM¥é”è€ä°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ô¥¹Ñ•ÉÙ…°ô‰ÁÉ•Í•ÉÙ•MÑ…ÉÑ¹ˆ€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñeá¥ÌÑ¥¬õíì™½¹ÑM¥é”è€ä°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ôÝ¥‘Ñ õìÐÁô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñQ½½±Ñ¥À½¹Ñ•¹ÐõìñÕÍÑ½µQ½½±Ñ¥À€¼ùô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÉ•„ÑåÁ”ô‰µ½¹½Ñ½¹”ˆ‘…Ñ…-•äõí¡…ÉÐ¹‘…Ñ…-•åô¹…µ”õí¡…ÉÐ¹Ñ¥Ñ±•ôÍÑÉ½­”õí¡…ÉÐ¹½±½ÉôÍÑÉ½­•]¥‘Ñ õìÄ¸Õô™¥±°õíÕÉ° É…´‘í¡…ÉÐ¹‘…Ñ…-•åô´‘íÍ…¹¥Ñ¥é•%¡À¹Í­Ô¥ô¥ô‘½Ðõí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½É•…¡…ÉÐø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½I•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•Èø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½Ñø4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½ÑÈø4(€€€€€€€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€€€€€€€ð½I•…Ð¹É…µ•¹Ðø4(€€€€€€€€€€€€€€€€€€€€¤4(€€€€€€€€€€€€€€€€€ô¥ô4(€€€€€€€€€€€€€€€€ð½Ñ‰½‘äø4(€€€€€€€€€€€€€€ð½Ñ…‰±”ø4(€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€í™¥±Ñ•É•¹±•¹Ñ €ôôô€À€˜˜€ 4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìÁ…‘‘¥¹œè€œÐÁÁàœ°Ñ•áÑ±¥¸è€•¹Ñ•Èœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œ°™½¹ÑM¥é”è€œÄÍÁàœõôù9¼ÁÉ½‘ÕÑÌ™½Õ¹ð½‘¥Øø4(€€€€€€€€€€€€¥ô4(€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€í¡…Í5½É”€˜˜€ 4(€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìÑ•áÑ±¥¸è€•¹Ñ•Èœ°µ…É¥¹Q½Àè€œÄÙÁàœõôø4(€€€€€€€€€€€€€€ñ‰ÕÑÑ½¸½¹±¥¬õì ¤€ôøÍ•ÑA…”¡À€ôøÀ€¬€Ä¥ôÍÑå±”õíì4(€€€€€€€€€€€€€€€Á…‘‘¥¹œè€œáÁà€ÈÑÁàœ°‰½É‘•ÉI…‘¥ÕÌè€œáÁàœ°4(€€€€€€€€€€€€€€€‰½É‘•Èè€œÅÁàÍ½±¥Ù…È ´µ‰½É‘•È¤œ°‰…­É½Õ¹è€Ù…È ´µ‰œµ…É¤œ°4(€€€€€€€€€€€€€€€½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°™½¹ÑM¥é”è€œÄÉÁàœ°ÕÉÍ½Èè€Á½¥¹Ñ•Èœ°4(€€€€€€€€€€€€€€€ÑÉ…¹Í¥Ñ¥½¸è€…±°€À¸ÄÉÌ•…Í”œ°4(€€€€€€€€€€€€€õô4(€€€€€€€€€€€€€½¹5½ÕÍ•¹Ñ•Èõí”€ôøì€¡”¹ÕÉÉ•¹ÑQ…É•Ð…Ì!Q51	ÕÑÑ½¹±•µ•¹Ð¤¹ÍÑå±”¹‰½É‘•É½±½È€ô€Ù…È ´µ…•¹Ð¤œì€¡”¹ÕÉÉ•¹ÑQ…É•Ð…Ì!Q51	ÕÑÑ½¹±•µ•¹Ð¤¹ÍÑå±”¹½±½È€ô€Ù…È ´µ…•¹Ð¤œõô4(€€€€€€€€€€€€€½¹5½ÕÍ•1•…Ù”õí”€ôøì€¡”¹ÕÉÉ•¹ÑQ…É•Ð…Ì!Q51	ÕÑÑ½¹±•µ•¹Ð¤¹ÍÑå±”¹‰½É‘•É½±½È€ô€Ù…È ´µ‰½É‘•È¤œì€¡”¹ÕÉÉ•¹ÑQ…É•Ð…Ì!Q51	ÕÑÑ½¹±•µ•¹Ð¤¹ÍÑå±”¹½±½È€ô€Ù…È ´µÑ•áÐµµÕÑ•¤œõô4(€€€€€€€€€€€€€€ø4(€€€€€€€€€€€€€€€1½…µ½É”ƒŠPÍ¡½Ý¥¹œíÁ…¥¹…Ñ•¹±•¹Ñ¡ô½˜í™¥±Ñ•É•¹±•¹Ñ¡ô4(€€€€€€€€€€€€€€ð½‰ÕÑÑ½¸ø4(€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€¥ô4(€€€€€€€€ð¼ø4(€€€€€€¥ô4(€€€€ð½‘¥Øø4(€€¤4)ô4(

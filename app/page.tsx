@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import {
@@ -23,6 +24,15 @@ type WeeklyRow = {
   total_units: number
   total_sessions: number
   total_page_views: number
+}
+
+type OverviewRpcRow = {
+  period: 'current' | 'prior'
+  start_date: string
+  revenue: number | string
+  units: number | string
+  sessions: number | string
+  page_views: number | string
 }
 
 // One P&L line from the get_finance_pnl RPC (dev). Amounts are already USD
@@ -175,18 +185,14 @@ export default function SalesOverview() {
 
   useEffect(() => {
     if (searchQuery.length < 2) { setSearchResults([]); setShowDropdown(false); return }
+    let cancelled = false
     const timer = setTimeout(async () => {
-      const q = searchQuery.toLowerCase()
-      const { data } = await supabase
-        .from('dim_product').select('sku, asin, title')
-        .or(`sku.ilike.%${q}%,asin.ilike.%${q}%,title.ilike.%${q}%`).limit(20)
-      if (data) {
-        const seen = new Set<string>()
-        setSearchResults(data.filter(p => { if (!p.sku || seen.has(p.sku)) return false; seen.add(p.sku); return true }))
-        setShowDropdown(true)
-      }
+      try {
+        const data = await searchProducts(searchQuery)
+        if (!cancelled) { setSearchResults(data); setShowDropdown(true) }
+      } catch (error) { if (!cancelled) console.error(error) }
     }, 200)
-    return () => clearTimeout(timer)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [searchQuery])
 
   const allChecked = searchResults.length > 0 && searchResults.every(p => selectedProducts.find(s => s.sku === p.sku))
@@ -212,16 +218,11 @@ export default function SalesOverview() {
 
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchQuery.length >= 2) {
-      const q = searchQuery.toLowerCase()
-      const { data } = await supabase
-        .from('dim_product').select('sku, asin, title')
-        .or(`sku.ilike.%${q}%,asin.ilike.%${q}%,title.ilike.%${q}%`).limit(500)
-      if (data) {
-        const seen = new Set<string>()
-        const unique = data.filter(p => { if (!p.sku || seen.has(p.sku)) return false; seen.add(p.sku); return true })
-        const toAdd = unique.filter(p => !selectedProducts.find(s => s.sku === p.sku))
+      try {
+        const data = await searchProducts(searchQuery, 500)
+        const toAdd = data.filter(p => !selectedProducts.find(s => s.sku === p.sku))
         setSelectedProducts(prev => [...prev, ...toAdd])
-      }
+      } catch (error) { console.error(error) }
       setSearchQuery(''); setShowDropdown(false)
     }
     if (e.key === 'Escape') setShowDropdown(false)
@@ -233,35 +234,35 @@ export default function SalesOverview() {
   // Main data fetch
   useEffect(() => {
     if (!dateRange || !dateRange.startDate) return
+    let cancelled = false
     async function load() {
       const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
 
-      let query = supabase
-        .from('fct_sales_daily')
-        .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, page_views, sku, title')
-        .in('marketplace', markets)
-        .gte('start_date', startDate)
-        .lte('start_date', endDate)
-        .order('start_date', { ascending: true })
-        .limit(100000)
-
-      if (selectedProducts.length > 0) query = query.in('sku', selectedProducts.map(p => p.sku))
-
-      const { data, error } = await query
+      const { data: overviewRows, error } = await supabase.rpc('get_sales_overview', {
+        p_start: startDate,
+        p_end: endDate,
+        p_prior_start: priorStart,
+        p_prior_end: priorEnd,
+        p_markets: markets,
+        p_skus: selectedProducts.length ? selectedProducts.map(p => p.sku) : null,
+      })
+      if (cancelled) return
       if (error) { console.error(error); setLoading(false); return }
 
+      const typedOverviewRows = (overviewRows || []) as OverviewRpcRow[]
+      const toLegacyRow = (row: OverviewRpcRow) => ({
+        start_date: row.start_date,
+        marketplace: 'US', // revenue is already normalized to USD by the RPC
+        ordered_product_sales_amount: Number(row.revenue) || 0,
+        units_ordered: Number(row.units) || 0,
+        sessions: Number(row.sessions) || 0,
+        page_views: Number(row.page_views) || 0,
+      })
+      const data = typedOverviewRows.filter(row => row.period === 'current').map(toLegacyRow)
+
       // Prior period
-      let prevQuery = supabase
-        .from('fct_sales_daily')
-        .select('start_date, marketplace, units_ordered, ordered_product_sales_amount, sessions, page_views, sku')
-        .in('marketplace', markets)
-        .gte('start_date', priorStart)
-        .lte('start_date', priorEnd)
-        .limit(100000)
-      if (selectedProducts.length > 0) prevQuery = prevQuery.in('sku', selectedProducts.map(p => p.sku))
-      const { data: pd } = await prevQuery
-      const prevRows: any[] = pd || []
+      const prevRows = typedOverviewRows.filter(row => row.period === 'prior').map(toLegacyRow)
 
       // Aggregate to a per-day, marketplace-combined series. The chart-bucket
       // control re-buckets this client-side; summary totals sum it directly.
@@ -306,6 +307,7 @@ export default function SalesOverview() {
       setLoading(false)
     }
     load()
+    return () => { cancelled = true }
   }, [markets, dateRange, selectedProducts])
 
   const sum = (key: keyof WeeklyRow) => dailySeries.reduce((s, r) => s + (r[key] as number), 0)
@@ -350,403 +352,8 @@ export default function SalesOverview() {
 
   const salesBreakdown: BreakdownRow[] = hasFinance ? [
     ...operatingRows.map(r => ({ label: r.widget_line, value: Number(r.amount_usd || 0) })),
-    { label: 'Marketplace net proceeds (before COGS)', value: netProceeds, live: true, strong: true },
-    { label: 'COGS', value: null },
-    { label: 'Bottom-line profit', value: null, strong: true },
-  ] : []
-
-  // Preset-aware empty-state label for the prior-period comparison line.
-  const noPriorLabel =
-    dateRange?.preset === 'ytd' ? 'No prior year data'
-    : 'No prior period'
-
-  const cards = [
-    { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} prior period` : noPriorLabel, trend: trend(totalRevenue, prevRevenue), icon: <DollarSign size={14} />, color: 'var(--accent)' },
-    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: prevUnits > 0 ? `${fmtUnits(prevUnits)} prior period` : noPriorLabel, trend: trend(totalUnits, prevUnits), icon: <ShoppingCart size={14} />, color: 'var(--green)' },
-    { label: `Sessions (${rangeLabel})`, value: fmtUnits(totalSessions), sub: prevSessions > 0 ? `${fmtUnits(prevSessions)} prior period` : noPriorLabel, trend: trend(totalSessions, prevSessions), icon: <Eye size={14} />, color: 'var(--yellow)' },
-    { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: prevAsp > 0 ? `${fmtASP(prevAsp)} prior period` : noPriorLabel, trend: trend(asp, prevAsp), icon: <BarChart2 size={14} />, color: '#6366F1' },
-    { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% prior period` : noPriorLabel, trend: trend(convRate, prevConvRate), icon: <Percent size={14} />, color: '#EC4899' },
-    { label: `Page Views (${rangeLabel})`, value: fmtUnits(totalPageViews), sub: 'total page views', trend: null, icon: <MousePointer size={14} />, color: '#10B981' },
-  ]
-
-  const truncate = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + 'â€¦' : s
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-        <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Sales Overview</h1>
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            All revenue in USD
-            {' Â· '}
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>
-              {dateRange && dateRange.startDate
-                ? `${fmtDateLabel(dateRange.startDate)} â€” ${fmtDateLabel(dateRange.endDate)}`
-                : 'Select a date range'}
-            </span>
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-          <DateRangeFilter onChange={setDateRange} defaultPreset="ytd" />
-          <MarketplaceFilter selected={markets} onChange={setMarkets} />
-        </div>
-      </div>
-
-      {/* Search Bar */}
-      <div ref={searchRef} style={{ position: 'relative', marginBottom: '20px' }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          background: 'var(--bg-card)', border: '1px solid var(--border)',
-          borderRadius: '10px', padding: '10px 14px', boxShadow: 'var(--shadow-sm)',
-        }}>
-          <Search size={14} color="var(--text-muted)" />
-          <input
-            type="text"
-            placeholder="Search by SKU, ASIN, or product name â€” press Enter to add all results"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            onFocus={() => searchQuery.length >= 2 && setShowDropdown(true)}
-            onKeyDown={handleKeyDown}
-            style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none',
-              color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'Inter, sans-serif',
-            }}
-          />
-          {selectedProducts.length > 0 && (
-            <button onClick={clearAll} style={{
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: 'var(--text-dim)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
-            }}>
-              <X size={11} /> Clear all
-            </button>
-          )}
-        </div>
-
-        {/* Dropdown */}
-        {showDropdown && searchResults.length > 0 && (
-          <div style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0,
-            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-            borderRadius: '10px', zIndex: 200, overflow: 'hidden',
-            boxShadow: 'var(--shadow-md)',
-          }}>
-            <div onClick={toggleAll} style={{
-              padding: '9px 14px', borderBottom: '1px solid var(--border)',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px',
-              background: 'var(--bg-hover)',
-            }}
-            onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--border)'}
-            onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}
-            >
-              <div style={{
-                width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0,
-                border: `1px solid ${allChecked || someChecked ? 'var(--accent)' : 'var(--border)'}`,
-                background: allChecked ? 'var(--accent)' : someChecked ? 'var(--accent-light)' : 'transparent',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {(allChecked || someChecked) && (
-                  <div style={{ width: '6px', height: '2px', background: allChecked ? 'white' : 'var(--accent)', borderRadius: '1px' }} />
-                )}
-              </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-                {allChecked ? 'Deselect all' : `Select all ${searchResults.length} results`}
-              </span>
-            </div>
-            {searchResults.map((p: any, i: number) => {
-              const isSelected = !!selectedProducts.find(s => s.sku === p.sku)
-              return (
-                <div key={i} onClick={() => toggleProduct(p)} style={{
-                  padding: '10px 14px',
-                  borderBottom: i < searchResults.length - 1 ? '1px solid var(--border)' : 'none',
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px',
-                  background: isSelected ? 'var(--accent-light)' : 'transparent',
-                  transition: 'background 0.1s ease',
-                }}
-                onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = isSelected ? 'var(--accent-light)' : 'transparent' }}
-                >
-                  <div style={{
-                    width: '14px', height: '14px', borderRadius: '4px', flexShrink: 0,
-                    border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
-                    background: isSelected ? 'var(--accent)' : 'transparent',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'all 0.12s ease',
-                  }}>
-                    {isSelected && (
-                      <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
-                        <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    )}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '2px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.title ? truncate(p.title, 60) : p.sku}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>
-                      {p.sku} Â· {p.asin}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {/* Selected tags */}
-        {selectedProducts.length > 0 && (
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px', alignItems: 'center' }}>
-            {selectedProducts.length <= 3 ? (
-              selectedProducts.map(p => (
-                <div key={p.sku} style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  background: 'var(--accent-light)', border: '1px solid var(--accent-border)',
-                  borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--accent)',
-                }}>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{p.sku}</span>
-                  <button onClick={() => removeProduct(p.sku)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', display: 'flex', padding: 0 }}>
-                    <X size={10} />
-                  </button>
-                </div>
-              ))
-            ) : (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px',
-                background: 'var(--accent-light)', border: '1px solid var(--accent-border)',
-                borderRadius: '6px', padding: '5px 12px', fontSize: '12px', color: 'var(--accent)',
-              }}>
-                <span style={{ fontWeight: 500 }}>{selectedProducts.length} products selected</span>
-                <button onClick={clearAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', padding: 0 }}>
-                  <X size={10} /> Clear all
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
-      ) : (
-        <>
-          {/* 6 Summary Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
-            {cards.map((card, i) => (
-              <div key={i} className={`card fade-up fade-up-delay-${Math.min(i + 1, 5)}`} style={{ padding: '18px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                    {card.label}
-                  </span>
-                  <div style={{ color: card.color, opacity: 0.6 }}>{card.icon}</div>
-                </div>
-                <div style={{ fontSize: '22px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '8px', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {card.value}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{card.sub}</span>
-                  {card.trend !== null && (
-                    <span style={{
-                      fontSize: '11px', fontWeight: 500,
-                      color: card.trend > 0 ? 'var(--green)' : card.trend < 0 ? 'var(--red)' : 'var(--text-muted)',
-                      display: 'flex', alignItems: 'center', gap: '2px',
-                    }}>
-                      {card.trend > 0 ? <TrendingUp size={11} /> : card.trend < 0 ? <TrendingDown size={11} /> : <Minus size={11} />}
-                      {Math.abs(card.trend).toFixed(1)}%
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Revenue + Units (dual-axis) with bucketing toggle */}
-          <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '18px' }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                  <span>{bucketAdj} Revenue &amp; Units</span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: 'var(--chart-primary)' }} /> Revenue
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: 'var(--chart-success)' }} /> Units
-                  </span>
-                  {selectedProducts.length > 0 && (
-                    <span style={{ fontSize: '11px', color: 'var(--accent)' }}>
-                      {selectedProducts.length} product{selectedProducts.length > 1 ? 's' : ''} selected
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  USD Â· {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} â€” ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
-                </div>
-              </div>
-              {/* Chart-only bucketing control */}
-              <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                {(['day', 'week', 'month'] as const).map(b => (
-                  <button key={b} onClick={() => setChartBucket(b)} style={{
-                    padding: '3px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 500,
-                    cursor: 'pointer', transition: 'all 0.12s ease',
-                    border: chartBucket === b ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                    background: chartBucket === b ? 'var(--accent-light)' : 'transparent',
-                    color: chartBucket === b ? 'var(--accent)' : 'var(--text-muted)',
-                  }}>{b === 'day' ? 'Daily' : b === 'week' ? 'Weekly' : 'Monthly'}</button>
-                ))}
-              </div>
-            </div>
-            <ResponsiveContainer width="100%" height={240}>
-              <ComposedChart data={chartData}>
-                <defs>
-                  <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
-                    <stop offset="95%" stopColor="var(--chart-primary)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="rev" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />
-                <YAxis yAxisId="units" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
-                <Tooltip content={<CustomTooltip />} />
-                <Area yAxisId="rev" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
-                <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={1.5} dot={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Sessions + Conversion rate over time */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
-            <div className="card" style={{ padding: '24px' }}>
-              <div style={{ marginBottom: '18px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Sessions over time</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} Â· all selected marketplaces combined</div>
-              </div>
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="sessGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--yellow)" stopOpacity={0.9} />
-                      <stop offset="95%" stopColor="var(--yellow)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Area type="monotone" dataKey="total_sessions" name="Sessions" stroke="var(--yellow)" strokeWidth={1.5} fill="url(#sessGrad)" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="card" style={{ padding: '24px' }}>
-              <div style={{ marginBottom: '18px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Conversion rate over time</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} Â· units Ã· sessions</div>
-              </div>
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="convGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#EC4899" stopOpacity={0.9} />
-                      <stop offset="95%" stopColor="#EC4899" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.toFixed(1) + '%'} width={50} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Area type="monotone" dataKey="conv_rate" name="Conversion Rate" stroke="#EC4899" strokeWidth={1.5} fill="url(#convGrad)" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Total Sales Breakdown */}
-          <div className="card" style={{ padding: '24px' }}>
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Total Sales Breakdown</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Finance settlement P&amp;L (USD) Â· &ldquo;Gross sales&rdquo; here is settlement product charges,
-                distinct from the ordered-revenue KPI above
-              </div>
-            </div>
-
-            {skuFilterActive ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
-                Total Sales Breakdown reflects your whole account; per-SKU P&amp;L isn&rsquo;t available yet.
-                Clear the product filter to see the account-level breakdown.
-              </div>
-            ) : financeError ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
-                Couldn&rsquo;t load the finance breakdown for this period&mdash;the request timed out or failed.
-                This doesn&rsquo;t mean the data is missing; try again, or narrow the date range.
-              </div>
-            ) : !hasFinance ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
-                No finance data for the selected period.
-              </div>
-            ) : (
-              <>
-                <div>
-                  {salesBreakdown.map((row, i) => {
-                    const isPlaceholder = row.value === null
-                    return (
-                      <div key={row.label} style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-                        padding: '9px 0',
-                        borderBottom: i < salesBreakdown.length - 1 ? '1px solid var(--border)' : 'none',
-                        opacity: isPlaceholder ? 0.55 : 1,
-                      }}>
-                        <span style={{
-                          fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px',
-                          fontWeight: row.strong ? 600 : 400,
-                          color: row.strong ? 'var(--text-primary)' : 'var(--text-muted)',
-                        }}>
-                          {row.label}
-                          {row.hint && (
-                            <span style={{ fontSize: '10px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                              ({row.hint})
-                            </span>
-                          )}
-                          {row.live && (
-                            <span style={{
-                              fontSize: '9px', fontWeight: 600, letterSpacing: '0.04em',
-                              color: 'var(--green)', background: 'var(--green-light)',
-                              borderRadius: '4px', padding: '1px 6px', textTransform: 'uppercase',
-                            }}>Live</span>
-                          )}
-                        </span>
-                        {isPlaceholder ? (
-                          <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                            Not yet tracked
-                          </span>
-                        ) : (
-                          <span style={{
-                            fontSize: '13px', fontWeight: row.strong ? 700 : 600,
-                            color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace',
-                          }}>
-                            {fmtCurrency(row.value as number)}
-                          </span>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {totalDeferred > 0 && (
-                  <div style={{ marginTop: '12px', fontSize: '11px', color: 'var(--yellow)', lineHeight: 1.5 }}>
-                    {fmtUnits(totalDeferred)} event{totalDeferred === 1 ? '' : 's'} in this range{' '}
-                    {totalDeferred === 1 ? 'is' : 'are'} not yet settled (deferred); these figures may change as they finalize.
-                  </div>
-                )}
-
-                <div style={{ marginTop: '14px', fontSize: '11px', color: 'var(--text-dim)', lineHeight: 1.5 }}>
-                  COGS and bottom-line profit are not yet tracked (COGS is not in the finance feed).
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
+    { label: 'Marketplace net proceeds (beforeß^½¶‰žËkºwµçeØÍÑå±”õíì4(€€€€€€€€€€€€€€€‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œáÁàœ°4(€€€€€€€€€€€€€€€‰…­É½Õ¹è€Ù…È ´µ…•¹Ðµ±¥¡Ð¤œ°‰½É‘•Èè€œÅÁàÍ½±¥Ù…È ´µ…•¹Ðµ‰½É‘•È¤œ°4(€€€€€€€€€€€€€€€‰½É‘•ÉI…‘¥ÕÌè€œÙÁàœ°Á…‘‘¥¹œè€œÕÁà€ÄÉÁàœ°™½¹ÑM¥é”è€œÄÉÁàœ°½±½Èè€Ù…È ´µ…•¹Ð¤œ°4(€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹Ñ]•¥¡Ðè€ÔÀÀõôùíÍ•±•Ñ•‘AÉ½‘ÕÑÌ¹±•¹Ñ¡ôÁÉ½‘ÕÑÌÍ•±•Ñ•ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€ñ‰ÕÑÑ½¸½¹±¥¬õí±•…É±±ôÍÑå±”õíì‰…­É½Õ¹è€¹½¹”œ°‰½É‘•Èè€¹½¹”œ°ÕÉÍ½Èè€Á½¥¹Ñ•Èœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°™½¹ÑM¥é”è€œÄÅÁàœ°‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÍÁàœ°Á…‘‘¥¹œè€Àõôø4(€€€€€€€€€€€€€€€€€€ñ`Í¥é”õìÄÁô€¼ø±•…È…±°4(€€€€€€€€€€€€€€€€ð½‰ÕÑÑ½¸ø4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€¥ô4(€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€¥ô4(€€€€€€ð½‘¥Øø4(4(€€€€€í±½…‘¥¹œ€ü€ 4(€€€€€€€€ñ‘¥ØÍÑå±”õíì½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°™½¹ÑM¥é”è€œÄÍÁàœõôù1½…‘¥¹œ¸¸¸ð½‘¥Øø4(€€€€€€¤€è€ 4(€€€€€€€€ðø4(€€€€€€€€€ì¼¨€ØMÕµµ…Éä…É‘Ì€¨½ô4(€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€É¥œ°É¥‘Q•µÁ±…Ñ•½±Õµ¹Ìè€É•Á•…Ð Ì°€Å™È¤œ°…Àè€œÄÉÁàœ°µ…É¥¹	½ÑÑ½´è€œÈÁÁàœõôø4(€€€€€€€€€€€í…É‘Ì¹µ…À ¡…É°¤¤€ôø€ 4(€€€€€€€€€€€€€€ñ‘¥Ø­•äõí¥ô±…ÍÍ9…µ”õí…É™…‘”µÕÀ™…‘”µÕÀµ‘•±…ä´‘í5…Ñ ¹µ¥¸¡¤€¬€Ä°€Ô¥õôÍÑå±”õíìÁ…‘‘¥¹œè€œÄáÁàœõôø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°µ…É¥¹	½ÑÑ½´è€œÄÁÁàœõôø4(€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÁÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°™½¹Ñ]•¥¡Ðè€ØÀÀ°Ñ•áÑQÉ…¹Í™½É´è€ÕÁÁ•É…Í”œ°±•ÑÑ•ÉMÁ…¥¹œè€œÀ¸ÀÙ•´œõôø4(€€€€€€€€€€€€€€€€€€€í…É¹±…‰•±ô4(€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì½±½Èè…É¹½±½È°½Á…¥Ñäè€À¸Øõôùí…É¹¥½¹ôð½‘¥Øø4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÈÉÁàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°±•ÑÑ•ÉMÁ…¥¹œè€œ´À¸ÑÁàœ°µ…É¥¹	½ÑÑ½´è€œáÁàœ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œõôø4(€€€€€€€€€€€€€€€€€í…É¹Ù…±Õ•ô4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œõôø4(€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œõôùí…É¹ÍÕ‰ôð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€í…É¹ÑÉ•¹€„ôô¹Õ±°€˜˜€ 4(€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€™½¹ÑM¥é”è€œÄÅÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°4(€€€€€€€€€€€€€€€€€€€€€½±½Èè…É¹ÑÉ•¹€ø€À€ü€Ù…È ´µÉ••¸¤œ€è…É¹ÑÉ•¹€ð€À€ü€Ù…È ´µÉ•¤œ€è€Ù…È ´µÑ•áÐµµÕÑ•¤œ°4(€€€€€€€€€€€€€€€€€€€€€‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÉÁàœ°4(€€€€€€€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€€€€€€í…É¹ÑÉ•¹€ø€À€ü€ñQÉ•¹‘¥¹UÀÍ¥é”õìÄÅô€¼ø€è…É¹ÑÉ•¹€ð€À€ü€ñQÉ•¹‘¥¹½Ý¸Í¥é”õìÄÅô€¼ø€è€ñ5¥¹ÕÌÍ¥é”õìÄÅô€¼ùô4(€€€€€€€€€€€€€€€€€€€€€í5…Ñ ¹…‰Ì¡…É¹ÑÉ•¹¤¹Ñ½¥á• Ä¥ô”4(€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€¤¥ô4(€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€ì¼¨I•Ù•¹Õ”€¬U¹¥ÑÌ€¡‘Õ…°µ…á¥Ì¤Ý¥Ñ ‰Õ­•Ñ¥¹œÑ½±”€¨½ô4(€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õíìÁ…‘‘¥¹œè€œÈÑÁàœ°µ…É¥¹	½ÑÑ½´è€œÄÑÁàœõôø4(€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€™±•àµÍÑ…ÉÐœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°…Àè€œÄÉÁàœ°µ…É¥¹	½ÑÑ½´è€œÄáÁàœõôø4(€€€€€€€€€€€€€€ñ‘¥Øø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÍÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°µ…É¥¹	½ÑÑ½´è€œÉÁàœ°‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÄÉÁàœ°™±•á]É…Àè€ÝÉ…Àœõôø4(€€€€€€€€€€€€€€€€€€ñÍÁ…¸ùí‰Õ­•Ñ‘©ôI•Ù•¹Õ”€™…µÀìU¹¥ÑÌð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÕÁàœ°™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°™½¹Ñ]•¥¡Ðè€ÐÀÀõôø4(€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíìÝ¥‘Ñ è€œáÁàœ°¡•¥¡Ðè€œáÁàœ°‰½É‘•ÉI…‘¥ÕÌè€œÉÁàœ°‰…­É½Õ¹è€Ù…È ´µ¡…ÉÐµÁÉ¥µ…Éä¤œõô€¼øI•Ù•¹Õ”4(€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÕÁàœ°™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°™½¹Ñ]•¥¡Ðè€ÐÀÀõôø4(€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíìÝ¥‘Ñ è€œáÁàœ°¡•¥¡Ðè€œáÁàœ°‰½É‘•ÉI…‘¥ÕÌè€œÉÁàœ°‰…­É½Õ¹è€Ù…È ´µ¡…ÉÐµÍÕ•ÍÌ¤œõô€¼øU¹¥ÑÌ4(€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€íÍ•±•Ñ•‘AÉ½‘ÕÑÌ¹±•¹Ñ €ø€À€˜˜€ 4(€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µ…•¹Ð¤œõôø4(€€€€€€€€€€€€€€€€€€€€€íÍ•±•Ñ•‘AÉ½‘ÕÑÌ¹±•¹Ñ¡ôÁÉ½‘ÕÑíÍ•±•Ñ•‘AÉ½‘ÕÑÌ¹±•¹Ñ €ø€Ä€ü€Ìœ€è€œôÍ•±•Ñ•4(€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôø4(€€€€€€€€€€€€€€€€€UMƒ
+Üí‘…Ñ•I…¹”€˜˜‘…Ñ•I…¹”¹ÍÑ…ÉÑ…Ñ”€ü€‘í™µÑ…Ñ•1…‰•°¡‘…Ñ•I…¹”¹ÍÑ…ÉÑ…Ñ”¥ôƒŠP€‘í™µÑ…Ñ•1…‰•°¡‘…Ñ•I…¹”¹•¹‘…Ñ”¥õ€€èÉ…¹•1…‰•±ô4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€ì¼¨¡…ÉÐµ½¹±ä‰Õ­•Ñ¥¹œ½¹ÑÉ½°€¨½ô4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…Àè€œÑÁàœ°™±•áM¡É¥¹¬è€Àõôø4(€€€€€€€€€€€€€€€ì¡l‘…äœ°€Ý••¬œ°€µ½¹Ñ t…Ì½¹ÍÐ¤¹µ…À¡ˆ€ôø€ 4(€€€€€€€€€€€€€€€€€€ñ‰ÕÑÑ½¸­•äõí‰ô½¹±¥¬õì ¤€ôøÍ•Ñ¡…ÉÑ	Õ­•Ð¡ˆ¥ôÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€Á…‘‘¥¹œè€œÍÁà€ÄÁÁàœ°‰½É‘•ÉI…‘¥ÕÌè€œÕÁàœ°™½¹ÑM¥é”è€œÄÁÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°4(€€€€€€€€€€€€€€€€€€€ÕÉÍ½Èè€Á½¥¹Ñ•Èœ°ÑÉ…¹Í¥Ñ¥½¸è€…±°€À¸ÄÉÌ•…Í”œ°4(€€€€€€€€€€€€€€€€€€€‰½É‘•Èè¡…ÉÑ	Õ­•Ð€ôôôˆ€ü€œÅÁàÍ½±¥Ù…È ´µ…•¹Ðµ‰½É‘•È¤œ€è€œÅÁàÍ½±¥Ù…È ´µ‰½É‘•È¤œ°4(€€€€€€€€€€€€€€€€€€€‰…­É½Õ¹è¡…ÉÑ	Õ­•Ð€ôôôˆ€ü€Ù…È ´µ…•¹Ðµ±¥¡Ð¤œ€è€ÑÉ…¹ÍÁ…É•¹Ðœ°4(€€€€€€€€€€€€€€€€€€€½±½Èè¡…ÉÑ	Õ­•Ð€ôôôˆ€ü€Ù…È ´µ…•¹Ð¤œ€è€Ù…È ´µÑ•áÐµµÕÑ•¤œ°4(€€€€€€€€€€€€€€€€€õôùíˆ€ôôô€‘…äœ€ü€…¥±äœ€èˆ€ôôô€Ý••¬œ€ü€]••­±äœ€è€5½¹Ñ¡±äôð½‰ÕÑÑ½¸ø4(€€€€€€€€€€€€€€€€¤¥ô4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€ñI•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•ÈÝ¥‘Ñ ôˆÄÀÀ”ˆ¡•¥¡ÐõìÈÐÁôø4(€€€€€€€€€€€€€€ñ½µÁ½Í•‘¡…ÉÐ‘…Ñ„õí¡…ÉÑ…Ñ…ôø4(€€€€€€€€€€€€€€€€ñ‘•™Ìø4(€€€€€€€€€€€€€€€€€€ñ±¥¹•…ÉÉ…‘¥•¹Ð¥ô‰É•ÙÉ…ˆàÄôˆÀˆäÄôˆÀˆàÈôˆÀˆäÈôˆÄˆø4(€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆÔ”ˆÍÑ½Á½±½Èô‰Ù…È ´µ¡…ÉÐµÁÉ¥µ…Éä¤ˆÍÑ½Á=Á…¥ÑäõìÅô€¼ø4(€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆäÔ”ˆÍÑ½Á½±½Èô‰Ù…È ´µ¡…ÉÐµÁÉ¥µ…Éä¤ˆÍÑ½Á=Á…¥ÑäõìÁô€¼ø4(€€€€€€€€€€€€€€€€€€ð½±¥¹•…ÉÉ…‘¥•¹Ðø4(€€€€€€€€€€€€€€€€ð½‘•™Ìø4(€€€€€€€€€€€€€€€€ñ…ÉÑ•Í¥…¹É¥ÍÑÉ½­•…Í¡…ÉÉ…äôˆÌ€ÌˆÍÑÉ½­”ô‰Ù…È ´µ‰½É‘•È¤ˆÙ•ÉÑ¥…°õí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€ñaá¥Ì‘…Ñ…-•äô‰±…‰•°ˆÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ô¥¹Ñ•ÉÙ…°ô‰ÁÉ•Í•ÉÙ•MÑ…ÉÑ¹ˆ€¼ø4(€€€€€€€€€€€€€€€€ñeá¥Ìåá¥Í%ô‰É•ØˆÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ôÑ¥­½Éµ…ÑÑ•ÈõíØ€ôø€œœ€¬™µÐ¡Ø¥ôÝ¥‘Ñ õìØÁô€¼ø4(€€€€€€€€€€€€€€€€ñeá¥Ìåá¥Í%ô‰Õ¹¥ÑÌˆ½É¥•¹Ñ…Ñ¥½¸ô‰É¥¡ÐˆÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ôÑ¥­½Éµ…ÑÑ•ÈõíØ€ôø™µÐ¡Ø¥ôÝ¥‘Ñ õìÔÁô€¼ø4(€€€€€€€€€€€€€€€€ñQ½½±Ñ¥À½¹Ñ•¹ÐõìñÕÍÑ½µQ½½±Ñ¥À€¼ùô€¼ø4(€€€€€€€€€€€€€€€€ñÉ•„åá¥Í%ô‰É•ØˆÑåÁ”ô‰µ½¹½Ñ½¹”ˆ‘…Ñ…-•äô‰Ñ½Ñ…±}É•Ù•¹Õ”ˆ¹…µ”ô‰I•Ù•¹Õ”ˆÍÑÉ½­”ô‰Ù…È ´µ¡…ÉÐµÁÉ¥µ…Éä¤ˆÍÑÉ½­•]¥‘Ñ õìÄ¸Õô™¥±°ô‰ÕÉ° É•ÙÉ…¤ˆ‘½Ðõí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€ñ1¥¹”åá¥Í%ô‰Õ¹¥ÑÌˆÑåÁ”ô‰µ½¹½Ñ½¹”ˆ‘…Ñ…-•äô‰Ñ½Ñ…±}Õ¹¥ÑÌˆ¹…µ”ô‰U¹¥ÑÌˆÍÑÉ½­”ô‰Ù…È ´µ¡…ÉÐµÍÕ•ÍÌ¤ˆÍÑÉ½­•]¥‘Ñ õìÄ¸Õô‘½Ðõí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€ð½½µÁ½Í•‘¡…ÉÐø4(€€€€€€€€€€€€ð½I•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•Èø4(€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€ì¼¨M•ÍÍ¥½¹Ì€¬½¹Ù•ÉÍ¥½¸É…Ñ”½Ù•ÈÑ¥µ”€¨½ô4(€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€É¥œ°É¥‘Q•µÁ±…Ñ•½±Õµ¹Ìè€œÅ™È€Å™Èœ°…Àè€œÄÑÁàœ°µ…É¥¹	½ÑÑ½´è€œÈÁÁàœõôø4(€€€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õíìÁ…‘‘¥¹œè€œÈÑÁàœõôø4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìµ…É¥¹	½ÑÑ½´è€œÄáÁàœõôø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÍÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°µ…É¥¹	½ÑÑ½´è€œÉÁàœõôùM•ÍÍ¥½¹Ì½Ù•ÈÑ¥µ”ð½‘¥Øø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôùí‰Õ­•Ñ‘©ôƒ
+Ü…±°Í•±•Ñ•µ…É­•ÑÁ±…•Ì½µ‰¥¹•ð½‘¥Øø4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€ñI•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•ÈÝ¥‘Ñ ôˆÄÀÀ”ˆ¡•¥¡ÐõìÈÀÁôø4(€€€€€€€€€€€€€€€€ñÉ•…¡…ÉÐ‘…Ñ„õí¡…ÉÑ…Ñ…ôø4(€€€€€€€€€€€€€€€€€€ñ‘•™Ìø4(€€€€€€€€€€€€€€€€€€€€ñ±¥¹•…ÉÉ…‘¥•¹Ð¥ô‰Í•ÍÍÉ…ˆàÄôˆÀˆäÄôˆÀˆàÈôˆÀˆäÈôˆÄˆø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆÔ”ˆÍÑ½Á½±½Èô‰Ù…È ´µå•±±½Ü¤ˆÍÑ½Á=Á…¥ÑäõìÀ¸åô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆäÔ”ˆÍÑ½Á½±½Èô‰Ù…È ´µå•±±½Ü¤ˆÍÑ½Á=Á…¥ÑäõìÁô€¼ø4(€€€€€€€€€€€€€€€€€€€€ð½±¥¹•…ÉÉ…‘¥•¹Ðø4(€€€€€€€€€€€€€€€€€€ð½‘•™Ìø4(€€€€€€€€€€€€€€€€€€ñ…ÉÑ•Í¥…¹É¥ÍÑÉ½­•…Í¡…ÉÉ…äôˆÌ€ÌˆÍÑÉ½­”ô‰Ù…È ´µ‰½É‘•È¤ˆÙ•ÉÑ¥…°õí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€€€ñaá¥Ì‘…Ñ…-•äô‰±…‰•°ˆÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ô¥¹Ñ•ÉÙ…°ô‰ÁÉ•Í•ÉÙ•MÑ…ÉÑ¹ˆ€¼ø4(€€€€€€€€€€€€€€€€€€ñeá¥ÌÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ôÑ¥­½Éµ…ÑÑ•ÈõíØ€ôø™µÐ¡Ø¥ôÝ¥‘Ñ õìÔÁô€¼ø4(€€€€€€€€€€€€€€€€€€ñQ½½±Ñ¥À½¹Ñ•¹ÐõìñÕÍÑ½µQ½½±Ñ¥À€¼ùô€¼ø4(€€€€€€€€€€€€€€€€€€ñÉ•„ÑåÁ”ô‰µ½¹½Ñ½¹”ˆ‘…Ñ…-•äô‰Ñ½Ñ…±}Í•ÍÍ¥½¹Ìˆ¹…µ”ô‰M•ÍÍ¥½¹ÌˆÍÑÉ½­”ô‰Ù…È ´µå•±±½Ü¤ˆÍÑÉ½­•]¥‘Ñ õìÄ¸Õô™¥±°ô‰ÕÉ° Í•ÍÍÉ…¤ˆ‘½Ðõí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€ð½É•…¡…ÉÐø4(€€€€€€€€€€€€€€ð½I•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•Èø4(€€€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õíìÁ…‘‘¥¹œè€œÈÑÁàœõôø4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìµ…É¥¹	½ÑÑ½´è€œÄáÁàœõôø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÍÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°µ…É¥¹	½ÑÑ½´è€œÉÁàœõôù½¹Ù•ÉÍ¥½¸É…Ñ”½Ù•ÈÑ¥µ”ð½‘¥Øø4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôùí‰Õ­•Ñ‘©ôƒ
+ÜÕ¹¥ÑÌƒÜÍ•ÍÍ¥½¹Ìð½‘¥Øø4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€ñI•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•ÈÝ¥‘Ñ ôˆÄÀÀ”ˆ¡•¥¡ÐõìÈÀÁôø4(€€€€€€€€€€€€€€€€ñÉ•…¡…ÉÐ‘…Ñ„õí¡…ÉÑ…Ñ…ôø4(€€€€€€€€€€€€€€€€€€ñ‘•™Ìø4(€€€€€€€€€€€€€€€€€€€€ñ±¥¹•…ÉÉ…‘¥•¹Ð¥ô‰½¹ÙÉ…ˆàÄôˆÀˆäÄôˆÀˆàÈôˆÀˆäÈôˆÄˆø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆÔ”ˆÍÑ½Á½±½ÈôˆÐàääˆÍÑ½Á=Á…¥ÑäõìÀ¸åô€¼ø4(€€€€€€€€€€€€€€€€€€€€€€ñÍÑ½À½™™Í•ÐôˆäÔ”ˆÍÑ½Á½±½ÈôˆÐàääˆÍÑ½Á=Á…¥ÑäõìÁô€¼ø4(€€€€€€€€€€€€€€€€€€€€ð½±¥¹•…ÉÉ…‘¥•¹Ðø4(€€€€€€€€€€€€€€€€€€ð½‘•™Ìø4(€€€€€€€€€€€€€€€€€€ñ…ÉÑ•Í¥…¹É¥ÍÑÉ½­•…Í¡…ÉÉ…äôˆÌ€ÌˆÍÑÉ½­”ô‰Ù…È ´µ‰½É‘•È¤ˆÙ•ÉÑ¥…°õí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€€€ñaá¥Ì‘…Ñ…-•äô‰±…‰•°ˆÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ô¥¹Ñ•ÉÙ…°ô‰ÁÉ•Í•ÉÙ•MÑ…ÉÑ¹ˆ€¼ø4(€€€€€€€€€€€€€€€€€€ñeá¥ÌÑ¥¬õíì™½¹ÑM¥é”è€ÄÀ°™¥±°è€Ù…È ´µÑ•áÐµ‘¥´¤œõôÑ¥­1¥¹”õí™…±Í•ô…á¥Í1¥¹”õí™…±Í•ôÑ¥­½Éµ…ÑÑ•ÈõíØ€ôøØ¹Ñ½¥á• Ä¤€¬€œ”ôÝ¥‘Ñ õìÔÁô€¼ø4(€€€€€€€€€€€€€€€€€€ñQ½½±Ñ¥À½¹Ñ•¹ÐõìñÕÍÑ½µQ½½±Ñ¥À€¼ùô€¼ø4(€€€€€€€€€€€€€€€€€€ñÉ•„ÑåÁ”ô‰µ½¹½Ñ½¹”ˆ‘…Ñ…-•äô‰½¹Ù}É…Ñ”ˆ¹…µ”ô‰½¹Ù•ÉÍ¥½¸I…Ñ”ˆÍÑÉ½­”ôˆÐàääˆÍÑÉ½­•]¥‘Ñ õìÄ¸Õô™¥±°ô‰ÕÉ° ½¹ÙÉ…¤ˆ‘½Ðõí™…±Í•ô€¼ø4(€€€€€€€€€€€€€€€€ð½É•…¡…ÉÐø4(€€€€€€€€€€€€€€ð½I•ÍÁ½¹Í¥Ù•½¹Ñ…¥¹•Èø4(€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€ì¼¨Q½Ñ…°M…±•Ì	É•…­‘½Ý¸€¨½ô4(€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õíìÁ…‘‘¥¹œè€œÈÑÁàœõôø4(€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìµ…É¥¹	½ÑÑ½´è€œÄÙÁàœõôø4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÍÁàœ°™½¹Ñ]•¥¡Ðè€ÔÀÀ°µ…É¥¹	½ÑÑ½´è€œÉÁàœõôùQ½Ñ…°M…±•Ì	É•…­‘½Ý¸ð½‘¥Øø4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œõôø4(€€€€€€€€€€€€€€€¥¹…¹”Í•ÑÑ±•µ•¹Ð@™…µÀí0€¡UM¤ƒ
+Ü€™±‘ÅÕ¼íÉ½ÍÌÍ…±•Ì™É‘ÅÕ¼ì¡•É”¥ÌÍ•ÑÑ±•µ•¹ÐÁÉ½‘ÕÐ¡…É•Ì°4(€€€€€€€€€€€€€€€‘¥ÍÑ¥¹Ð™É½´Ñ¡”½É‘•É•µÉ•Ù•¹Õ”-A$…‰½Ù”4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€€€íÍ­Õ¥±Ñ•ÉÑ¥Ù”€ü€ 4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÉÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°±¥¹•!•¥¡Ðè€Ä¸Ø°Á…‘‘¥¹œè€œÄÁÁà€Àœõôø4(€€€€€€€€€€€€€€€Q½Ñ…°M…±•Ì	É•…­‘½Ý¸É•™±•ÑÌå½ÕÈÝ¡½±”…½Õ¹ÐìÁ•ÈµM-T@™…µÀí0¥Í¸™ÉÍÅÕ¼íÐ…Ù…¥±…‰±”å•Ð¸4(€€€€€€€€€€€€€€€±•…ÈÑ¡”ÁÉ½‘ÕÐ™¥±Ñ•ÈÑ¼Í•”Ñ¡”…½Õ¹Ðµ±•Ù•°‰É•…­‘½Ý¸¸4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€¤€è™¥¹…¹•ÉÉ½È€ü€ 4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÉÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°±¥¹•!•¥¡Ðè€Ä¸Ø°Á…‘‘¥¹œè€œÄÁÁà€Àœõôø4(€€€€€€€€€€€€€€€½Õ±‘¸™ÉÍÅÕ¼íÐ±½…Ñ¡”™¥¹…¹”‰É•…­‘½Ý¸™½ÈÑ¡¥ÌÁ•É¥½™µ‘…Í íÑ¡”É•ÅÕ•ÍÐÑ¥µ•½ÕÐ½È™…¥±•¸4(€€€€€€€€€€€€€€€Q¡¥Ì‘½•Í¸™ÉÍÅÕ¼íÐµ•…¸Ñ¡”‘…Ñ„¥Ìµ¥ÍÍ¥¹œìÑÉä……¥¸°½È¹…ÉÉ½ÜÑ¡”‘…Ñ”É…¹”¸4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€¤€è€…¡…Í¥¹…¹”€ü€ 4(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÄÉÁàœ°½±½Èè€Ù…È ´µÑ•áÐµµÕÑ•¤œ°±¥¹•!•¥¡Ðè€Ä¸Ø°Á…‘‘¥¹œè€œÄÁÁà€Àœõôø4(€€€€€€€€€€€€€€€9¼™¥¹…¹”‘…Ñ„™½ÈÑ¡”Í•±•Ñ•Á•É¥½¸4(€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€¤€è€ 4(€€€€€€€€€€€€€€ðø4(€€€€€€€€€€€€€€€€ñ‘¥Øø4(€€€€€€€€€€€€€€€€€íÍ…±•Í	É•…­‘½Ý¸¹µ…À ¡É½Ü°¤¤€ôøì4(€€€€€€€€€€€€€€€€€€€½¹ÍÐ¥ÍA±…•¡½±‘•È€ôÉ½Ü¹Ù…±Õ”€ôôô¹Õ±°4(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸€ 4(€€€€€€€€€€€€€€€€€€€€€€ñ‘¥Ø­•äõíÉ½Ü¹±…‰•±ôÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°…Àè€œÄÉÁàœ°4(€€€€€€€€€€€€€€€€€€€€€€€Á…‘‘¥¹œè€œåÁà€Àœ°4(€€€€€€€€€€€€€€€€€€€€€€€‰½É‘•É	½ÑÑ½´è¤€ðÍ…±•Í	É•…­‘½Ý¸¹±•¹Ñ €´€Ä€ü€œÅÁàÍ½±¥Ù…È ´µ‰½É‘•È¤œ€è€¹½¹”œ°4(€€€€€€€€€€€€€€€€€€€€€€€½Á…¥Ñäè¥ÍA±…•¡½±‘•È€ü€À¸ÔÔ€è€Ä°4(€€€€€€€€€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€€€™½¹ÑM¥é”è€œÄÉÁàœ°‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œáÁàœ°4(€€€€€€€€€€€€€€€€€€€€€€€€€™½¹Ñ]•¥¡ÐèÉ½Ü¹ÍÑÉ½¹œ€ü€ØÀÀ€è€ÐÀÀ°4(€€€€€€€€€€€€€€€€€€€€€€€€€½±½ÈèÉ½Ü¹ÍÑÉ½¹œ€ü€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œ€è€Ù…È ´µÑ•áÐµµÕÑ•¤œ°4(€€€€€€€€€€€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€€€€€€€€€€íÉ½Ü¹±…‰•±ô4(€€€€€€€€€€€€€€€€€€€€€€€€€íÉ½Ü¹¡¥¹Ð€˜˜€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÁÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œ°™½¹ÑMÑå±”è€¥Ñ…±¥Œœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¡íÉ½Ü¹¡¥¹Ñô¤4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€€íÉ½Ü¹±¥Ù”€˜˜€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€™½¹ÑM¥é”è€œåÁàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°±•ÑÑ•ÉMÁ…¥¹œè€œÀ¸ÀÑ•´œ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½±½Èè€Ù…È ´µÉ••¸¤œ°‰…­É½Õ¹è€Ù…È ´µÉ••¸µ±¥¡Ð¤œ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰½É‘•ÉI…‘¥ÕÌè€œÑÁàœ°Á…‘‘¥¹œè€œÅÁà€ÙÁàœ°Ñ•áÑQÉ…¹Í™½É´è€ÕÁÁ•É…Í”œ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€õôù1¥Ù”ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€í¥ÍA±…•¡½±‘•È€ü€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œ°™½¹ÑMÑå±”è€¥Ñ…±¥Œœõôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€9½Ðå•ÐÑÉ…­•4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€¤€è€ 4(€€€€€€€€€€€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì4(€€€€€€€€€€€€€€€€€€€€€€€€€€€™½¹ÑM¥é”è€œÄÍÁàœ°™½¹Ñ]•¥¡ÐèÉ½Ü¹ÍÑÉ½¹œ€ü€ÜÀÀ€è€ØÀÀ°4(€€€€€€€€€€€€€€€€€€€€€€€€€€€½±½Èè€Ù…È ´µÑ•áÐµÁÉ¥µ…Éä¤œ°™½¹Ñ…µ¥±äè€)•Ñ	É…¥¹Ì5½¹¼°µ½¹½ÍÁ…”œ°4(€€€€€€€€€€€€€€€€€€€€€€€€€õôø4(€€€€€€€€€€€€€€€€€€€€€€€€€€€í™µÑÕÉÉ•¹ä¡É½Ü¹Ù…±Õ”…Ì¹Õµ‰•È¥ô4(€€€€€€€€€€€€€€€€€€€€€€€€€€ð½ÍÁ…¸ø4(€€€€€€€€€€€€€€€€€€€€€€€€¥ô4(€€€€€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€€€€€¤4(€€€€€€€€€€€€€€€€€ô¥ô4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(4(€€€€€€€€€€€€€€€íÑ½Ñ…±•™•ÉÉ•€ø€À€˜˜€ 4(€€€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìµ…É¥¹Q½Àè€œÄÉÁàœ°™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µå•±±½Ü¤œ°±¥¹•!•¥¡Ðè€Ä¸Ôõôø4(€€€€€€€€€€€€€€€€€€€í™µÑU¹¥ÑÌ¡Ñ½Ñ…±•™•ÉÉ•¥ô•Ù•¹ÑíÑ½Ñ…±•™•ÉÉ•€ôôô€Ä€ü€œœ€è€Ìô¥¸Ñ¡¥ÌÉ…¹•ìœ€ô4(€€€€€€€€€€€€€€€€€€€íÑ½Ñ…±•™•ÉÉ•€ôôô€Ä€ü€¥Ìœ€è€…É”ô¹½Ðå•ÐÍ•ÑÑ±•€¡‘•™•ÉÉ•¤ìÑ¡•Í”™¥ÕÉ•Ìµ…ä¡…¹”…ÌÑ¡•ä™¥¹…±¥é”¸4(€€€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€€€¥ô4(4(€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíìµ…É¥¹Q½Àè€œÄÑÁàœ°™½¹ÑM¥é”è€œÄÅÁàœ°½±½Èè€Ù…È ´µÑ•áÐµ‘¥´¤œ°±¥¹•!•¥¡Ðè€Ä¸Ôõôø4(€€€€€€€€€€€€€€€€€=L…¹‰½ÑÑ½´µ±¥¹”ÁÉ½™¥Ð…É”¹½Ðå•ÐÑÉ…­•€¡=L¥Ì¹½Ð¥¸Ñ¡”™¥¹…¹”™••¤¸4(€€€€€€€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€€€€€€€ð¼ø4(€€€€€€€€€€€€¥ô4(€€€€€€€€€€ð½‘¥Øø4(€€€€€€€€ð¼ø4(€€€€€€¥ô4(€€€€ð½‘¥Øø4(€€¤4)ô4(
