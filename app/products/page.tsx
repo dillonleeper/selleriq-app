@@ -296,24 +296,23 @@ export default function ProductPerformance() {
       .sort((left, right) => cadenceMetric === 'units' ? right.units - left.units : right.revenue - left.revenue)
       .slice(0, cadenceLimit)
       .map(product => product.sku)
-    supabase.rpc('get_sku_sales', {
+    supabase.rpc('get_sku_sales_cadence', {
       p_start: dateRange.startDate,
       p_end: dateRange.endDate,
-      p_prior_start: dateRange.priorStart,
-      p_prior_end: dateRange.priorEnd,
       p_markets: markets,
       p_skus: cadenceSkus,
     }).then(({ data, error }) => {
       if (cancelled) return
       if (error) { console.error(error); setCadenceLoading(false); return }
       const cadenceBySku: Record<string, DataPoint[]> = {}
-      for (const row of (data || []) as any[]) {
-        cadenceBySku[row.sku] = ((row.series as any[]) || []).map(point => ({
+      for (const point of (data || []) as any[]) {
+        if (!cadenceBySku[point.sku]) cadenceBySku[point.sku] = []
+        cadenceBySku[point.sku].push({
           period_key: point.d,
           label: new Date(point.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
           revenue: Math.round(Number(point.revenue) || 0),
           units: Number(point.units) || 0,
-        }))
+        })
       }
       setAllPeriodData(cadenceBySku)
       setCadenceLoading(false)

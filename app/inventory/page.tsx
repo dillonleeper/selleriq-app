@@ -763,6 +763,7 @@ export default function Inventory() {
     let cancelled = false
     async function load() {
       setLoading(true)
+      try {
 
       const latestSnapshots = (await Promise.all(markets.map(async marketplace => {
         const { data, error } = await supabase
@@ -911,10 +912,20 @@ export default function Inventory() {
         }
       })
 
-      setInventory(rows)
-      setSalesHistoryBySkuMarket(mapHistory(dailySalesBySku))
-      setSalesHistoryBySkuOnly(mapHistory(dailySalesBySkuOnly))
-      setLoading(false)
+        if (cancelled) return
+        setInventory(rows)
+        setSalesHistoryBySkuMarket(mapHistory(dailySalesBySku))
+        setSalesHistoryBySkuOnly(mapHistory(dailySalesBySkuOnly))
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load inventory dashboard', error)
+          setInventory([])
+          setSalesHistoryBySkuMarket({})
+          setSalesHistoryBySkuOnly({})
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
     load()
     return () => { cancelled = true }

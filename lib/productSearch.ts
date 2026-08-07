@@ -13,15 +13,19 @@ export async function searchProducts(
   query: string,
   limit = 20,
 ): Promise<ProductSearchResult[]> {
-  const normalized = query.trim()
+  const normalized = query.trim().slice(0, 100)
   if (normalized.length < 2) return []
+
+  // search_products uses LIKE. Escape user-supplied LIKE metacharacters so
+  // '%' and '_' remain literal input instead of expanding the candidate scan.
+  const escapedQuery = normalized.replace(/[\\%_]/g, '\\$&')
 
   const cacheKey = `${normalized.toLowerCase()}::${limit}`
   const cached = searchCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.results
 
   const { data, error } = await supabase.rpc('search_products', {
-    p_query: normalized,
+    p_query: escapedQuery,
     p_limit: limit,
   })
 

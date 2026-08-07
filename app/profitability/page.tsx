@@ -66,7 +66,7 @@ export default function ProfitabilityPage() {
   return <div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20, marginBottom: 24 }}>
       <div><h1 style={{ fontSize: 20, fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>Profitability</h1>
-        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 12 }}>Contribution profit after advertising, Amazon fees, refunds, and full landed product cost{dateRange ? ` · ${PRESET_LABELS[dateRange.preset]}` : ''}</p>
+        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 12 }}>Contribution profit after advertising, Amazon fees, refunds, and full landed product cost{dateRange ? ` · ${PRESET_LABELS[dateRange.preset]}` : ''}. Includes only complete imported profitability periods contained in the selected range.</p>
       </div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
         <DateRangeFilter onChange={changeDateRange} defaultPreset="last_90d" />
