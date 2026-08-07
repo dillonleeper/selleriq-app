@@ -391,7 +391,7 @@ export default function SalesOverview() {
             units: row.units, sessions: row.sessions,
             prior_sessions: row.prev_sessions, prior_units: row.prev_units,
             conversion_rate: row.conv_rate, buy_box_pct: row.buy_box_pct,
-          })).sort((a, b) => Math.abs(Number(b.revenue_delta)) - Math.abs(Number(a.revenue_delta))).slice(0, 20)
+          })).sort((a, b) => Math.abs(Number(b.revenue_delta)) - Math.abs(Number(a.revenue_delta)))
           setSkuDrivers(driverRows)
 
           if (marketResult.error) console.error(marketResult.error)
@@ -703,7 +703,13 @@ export default function SalesOverview() {
             skuDrivers={skuDrivers}
             marketDrivers={marketDrivers}
             inventoryRisks={inventoryRisks}
-            metrics={{ sessions: totalSessions, priorSessions: prevSessions, conversion: convRate, priorConversion: prevConvRate, asp, priorAsp: prevAsp }}
+            metrics={{
+              revenue: totalRevenue, priorRevenue: prevRevenue,
+              units: totalUnits, priorUnits: prevUnits,
+              sessions: totalSessions, priorSessions: prevSessions,
+              conversion: convRate, priorConversion: prevConvRate,
+              asp, priorAsp: prevAsp,
+            }}
           />
 
           {/* Revenue + Units (dual-axis) with bucketing toggle */}
