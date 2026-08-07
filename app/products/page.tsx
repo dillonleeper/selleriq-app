@@ -149,6 +149,11 @@ export default function ProductPerformance() {
   const searchRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    const sku = new URLSearchParams(window.location.search).get('sku')?.trim()
+    if (sku) setSelectedProducts([{ sku }])
+  }, [])
+
+  useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
         setShowDropdown(false)

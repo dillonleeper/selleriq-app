@@ -1,6 +1,7 @@
 'use client'
 
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, Boxes, EyeOff } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
+import RecommendedActions from '@/components/RecommendedActions'
 
 export type SkuDriver = {
   sku: string
@@ -30,6 +31,7 @@ export type InventoryRisk = {
   snapshot_date: string
   available_quantity: number | string
   inbound_quantity: number | string
+  recent_units: number | string
   units_per_day: number | string
   available_days_of_cover: number | string
   days_of_cover: number | string
@@ -123,53 +125,6 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
     ? `Revenue ${revenueDelta >= 0 ? 'increased' : 'decreased'} ${money(Math.abs(revenueDelta))} (${percent(revenueChange)}) versus ${comparisonLabel}. The largest modeled effect came from ${rankedFactors[0].label.toLowerCase()}, which ${effectClause(rankedFactors[0])}. ${rankedFactors[1].label} ${effectClause(rankedFactors[1])}. ${strongestSku ? `${strongestSku.sku} was the largest SKU ${revenueDelta >= 0 ? 'gain' : 'decline'} at ${signedMoney(n(strongestSku.revenue_delta))}.` : 'No single SKU materially drove the change.'}`
     : `A complete ${comparisonLabel} is not available for this selection, so change attribution is intentionally withheld.`
 
-  const actionRows = comparisonAvailable
-    ? skuDrivers.flatMap(row => {
-        const actions: Array<{ key: string; severity: number; icon: React.ReactNode; title: string; detail: string }> = []
-        const revenue = n(row.revenue)
-        const priorRevenueForSku = n(row.prior_revenue)
-        const sessions = n(row.sessions)
-        const priorSessions = n(row.prior_sessions)
-        const conversion = n(row.conversion_rate)
-        const priorConversion = priorSessions > 0 ? (n(row.prior_units) / priorSessions) * 100 : 0
-        const revenuePerSession = sessions > 0 ? revenue / sessions : 0
-        const asp = n(row.units) > 0 ? revenue / n(row.units) : 0
-        if (priorRevenueForSku > 0 && revenue < priorRevenueForSku * 0.8) {
-          const sessionChange = priorSessions > 0 ? ((sessions - priorSessions) / priorSessions) * 100 : 0
-          const conversionChange = conversion - priorConversion
-          const likelyDriver = sessionChange < -10
-            ? `sessions ${percent(sessionChange)}`
-            : conversionChange < -1
-              ? `conversion ${conversionChange.toFixed(1)} points`
-              : n(row.buy_box_pct) > 0 && n(row.buy_box_pct) < 90
-                ? `Buy Box ${n(row.buy_box_pct).toFixed(1)}%`
-                : 'review pricing and demand mix'
-          actions.push({ key: `${row.sku}-revenue`, severity: priorRevenueForSku - revenue, icon: <ArrowDownRight size={14} />, title: `Investigate ${row.sku} revenue decline`, detail: `${money(priorRevenueForSku - revenue)} decline · likely driver: ${likelyDriver}` })
-        }
-        if (priorSessions > 0 && sessions < priorSessions * 0.8) {
-          actions.push({ key: `${row.sku}-traffic`, severity: (priorSessions - sessions) * revenuePerSession, icon: <EyeOff size={14} />, title: `Recover traffic for ${row.sku}`, detail: `${percent(((sessions - priorSessions) / priorSessions) * 100)} sessions · about ${money((priorSessions - sessions) * revenuePerSession)} revenue exposure` })
-        }
-        if (priorConversion > 0 && conversion < priorConversion - 1) {
-          const exposure = sessions * ((priorConversion - conversion) / 100) * asp
-          actions.push({ key: `${row.sku}-conversion`, severity: exposure, icon: <AlertTriangle size={14} />, title: `Fix conversion for ${row.sku}`, detail: `${(conversion - priorConversion).toFixed(1)} points · about ${money(exposure)} revenue exposure` })
-        }
-        if (n(row.buy_box_pct) > 0 && n(row.buy_box_pct) < 90) {
-          const exposure = revenue * ((90 - n(row.buy_box_pct)) / 100)
-          actions.push({ key: `${row.sku}-buybox`, severity: exposure, icon: <AlertTriangle size={14} />, title: `Recover Buy Box for ${row.sku}`, detail: `${n(row.buy_box_pct).toFixed(1)}% ownership · about ${money(exposure)} revenue exposure` })
-        }
-        return actions.sort((a, b) => b.severity - a.severity).slice(0, 1)
-      })
-    : []
-
-  const inventoryActions = inventoryRisks.slice(0, 5).map(row => ({
-    key: `${row.marketplace}-${row.sku}-stock`,
-    severity: n(row.estimated_monthly_revenue) * Math.max(0, (28 - n(row.days_of_cover)) / 28),
-    icon: <Boxes size={14} />,
-    title: `Reorder or expedite ${row.sku} (${row.marketplace})`,
-    detail: `${n(row.days_of_cover).toFixed(1)} projected days cover including inbound · ${money(n(row.estimated_monthly_revenue))}/mo revenue exposed`,
-  }))
-  const actions = [...actionRows, ...inventoryActions].sort((a, b) => b.severity - a.severity).slice(0, 8)
-
   return (
     <div style={{ display: 'grid', gap: 14, marginBottom: 20 }}>
       <section className="card" aria-labelledby="change-heading" style={{ padding: 20, borderLeft: '3px solid var(--accent)' }}>
@@ -242,26 +197,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         </div>
       )}
 
-      <section className="card" aria-labelledby="actions-heading" style={{ padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
-          <div>
-            <div id="actions-heading" style={{ fontSize: 13, fontWeight: 600 }}>Recommended actions</div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Active, selling listings only · ranked by estimated revenue impact.</div>
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>Ads and profitability remain gated until source data is verified.</div>
-        </div>
-        {actions.length === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '8px 0' }}>No supported high-priority actions for this selection.</div>
-        ) : actions.map((action, index) => (
-          <div key={action.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: index ? '1px solid var(--border)' : 'none' }}>
-            <span style={{ color: index < 3 ? 'var(--red)' : 'var(--yellow)' }}>{action.icon}</span>
-            <div style={{ flex: 1 }}>
-              <span style={{ fontSize: 12, fontWeight: 600 }}>{action.title}</span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{action.detail}</span>
-            </div>
-          </div>
-        ))}
-      </section>
+      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} />
     </div>
   )
 }

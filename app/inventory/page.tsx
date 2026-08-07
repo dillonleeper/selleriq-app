@@ -556,6 +556,16 @@ export default function Inventory() {
   const searchRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sku = params.get('sku')?.trim()
+    const marketplace = params.get('market')
+    const requestedTab = params.get('tab')
+    if (sku) setSelectedProducts([{ sku }])
+    if (marketplace === 'US' || marketplace === 'CA') setMarkets([marketplace])
+    if (requestedTab === 'inventory' || requestedTab === 'fba' || requestedTab === 'supplier') setTab(requestedTab)
+  }, [])
+
+  useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
         setShowDropdown(false)
