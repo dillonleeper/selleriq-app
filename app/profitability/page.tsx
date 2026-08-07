@@ -101,9 +101,9 @@ function feeTypeLabel(value: string) {
 }
 
 function feeTreatment(value: string) {
-  if (value === 'SubscriptionFee') return 'Account overhead'
-  if (value === 'Other / correction') return 'Needs review'
-  return 'Additional Amazon detail required'
+  if (value === 'SubscriptionFee') return 'Keep account-level'
+  if (value === 'Other / correction') return 'SellerIQ review'
+  return 'Potentially allocatable'
 }
 
 function SummaryCard({ label, value, note, tone = 'default' }: {
@@ -304,7 +304,8 @@ export default function ProfitabilityPage() {
       </div>
       {feeBreakdown.length > 0 && <div style={{ borderTop: '1px solid var(--border)', padding: '14px 22px 18px' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>Account-level Amazon fee breakdown</div>
-        <div style={{ marginTop: 3, marginBottom: 10, fontSize: 10, color: 'var(--text-muted)' }}>These fees are present in SellerIQ but Amazon did not attach them directly to a SKU.</div>
+        <div style={{ marginTop: 3, marginBottom: 10, fontSize: 10, color: 'var(--text-muted)' }}>These fees are present in SellerIQ but Amazon did not attach them directly to a SKU. No action is required from you.</div>
+        <div style={{ marginBottom: 10, padding: '8px 10px', borderRadius: 5, background: 'var(--bg-elevated)', fontSize: 9, lineHeight: 1.5, color: 'var(--text-muted)' }}><strong style={{ color: 'var(--text-primary)' }}>Potentially allocatable</strong> means SellerIQ may attribute it using additional Amazon reports. <strong style={{ color: 'var(--text-primary)' }}>Keep account-level</strong> means it is not a product charge. <strong style={{ color: 'var(--text-primary)' }}>SellerIQ review</strong> means an unusual correction is awaiting automated classification.</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.6fr) minmax(110px, .7fr) minmax(90px, .6fr) minmax(190px, 1fr)', gap: 0, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
           <div style={{ padding: '9px 12px', background: 'var(--bg-elevated)', fontSize: 9, fontWeight: 700 }}>Fee category</div>
           <div style={{ padding: '9px 12px', background: 'var(--bg-elevated)', fontSize: 9, fontWeight: 700, textAlign: 'right' }}>Amount</div>
@@ -314,7 +315,7 @@ export default function ProfitabilityPage() {
             <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 10 }}>{feeTypeLabel(item.fee_type)}</div>
             <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: n(item.amount_usd) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{formatMoney(item.amount_usd)}</div>
             <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 10 }}>{n(item.transaction_count).toLocaleString()}</div>
-            <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 9, color: item.fee_type === 'SubscriptionFee' ? 'var(--text-muted)' : 'var(--amber)' }}>{feeTreatment(item.fee_type)}</div>
+            <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 9, color: item.fee_type === 'SubscriptionFee' ? 'var(--text-muted)' : item.fee_type === 'Other / correction' ? 'var(--red)' : 'var(--amber)' }}>{feeTreatment(item.fee_type)}</div>
           </React.Fragment>)}
         </div>
       </div>}
