@@ -37,6 +37,10 @@ type InventoryRow = {
   fulfillable: number
   available: number
   reserved: number
+  reserved_customer_orders: number
+  reserved_fc_transfers: number
+  reserved_fc_processing: number
+  reserved_breakdown_complete: boolean
   inbound: number
   total_fba: number
   unsellable: number
@@ -56,6 +60,10 @@ type FbaReplenRow = {
   fulfillable: number
   inbound: number
   reserved: number
+  reserved_customer_orders: number
+  reserved_fc_transfers: number
+  reserved_fc_processing: number
+  reserved_breakdown_complete: boolean
   inventory_position: number
   excluded_inventory: number
   target_units: number
@@ -550,7 +558,9 @@ function FbaDecisionPanel({
   const maxUnits = Math.max(1, ...latestHistory.map(point => point.units))
   const needsShipment = row.units_to_send > 0
   const sendNow = needsShipment && (shipByDays === null || shipByDays <= 0)
-  const headline = !needsShipment
+  const headline = !row.reserved_breakdown_complete
+    ? 'Recommendation paused — FC transfer data is incomplete'
+    : !needsShipment
     ? 'No FBA shipment needed'
     : sendNow
       ? `Send ${fmt(row.units_to_send)} units now`
@@ -563,10 +573,12 @@ function FbaDecisionPanel({
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '7px', fontWeight: 600 }}>Recommended action</div>
           <div style={{ fontSize: '22px', lineHeight: 1.2, fontWeight: 700, color: sendNow ? 'var(--red)' : needsShipment ? 'var(--accent)' : 'var(--green)', marginBottom: '9px' }}>{headline}</div>
           <div style={{ fontSize: '12px', lineHeight: 1.55, color: 'var(--text-muted)' }}>
-            {row.avg_daily_units <= 0
-              ? 'No recent unit sales were found, so SellerIQ cannot calculate a replenishment quantity.'
-              : `At ${row.avg_daily_units.toFixed(1)} units/day, projected available inventory covers about ${row.days_of_cover} days.`}
-            {riskGapDays > 0 && ` A shipment sent today may arrive about ${riskGapDays} day${riskGapDays === 1 ? '' : 's'} after stock runs out.`}
+            {!row.reserved_breakdown_complete
+              ? 'SellerIQ did not receive the FC-transfer field from Amazon’s reserved-inventory report. The quantity below is provisional and should not be used for a shipment decision.'
+              : row.avg_daily_units <= 0
+                ? 'No recent unit sales were found, so SellerIQ cannot calculate a replenishment quantity.'
+                : `At ${row.avg_daily_units.toFixed(1)} units/day, projected available inventory covers about ${row.days_of_cover} days.`}
+            {row.reserved_breakdown_complete && riskGapDays > 0 && ` A shipment sent today may arrive about ${riskGapDays} day${riskGapDays === 1 ? '' : 's'} after stock runs out.`}
           </div>
         </div>
 
@@ -599,7 +611,9 @@ function FbaDecisionPanel({
           {[
             ['Sellable now', fmt(row.available), 'Amazon available quantity'],
             ['Already inbound', `+ ${fmt(row.inbound)}`, 'Working, shipped, and receiving'],
-            ['Projected available', fmt(row.inventory_position), 'Sellable now + inbound'],
+            ['FC transfer', row.reserved_breakdown_complete ? `+ ${fmt(row.reserved_fc_transfers)}` : 'Missing', 'Moving between Amazon fulfillment centers'],
+            ['FC processing', `+ ${fmt(row.reserved_fc_processing)}`, 'Expected to become sellable'],
+            ['Projected available', fmt(row.inventory_position), 'Available + inbound + FC transfer + FC processing'],
             ['Target stock', fmt(row.target_units), `${targetDays} days × ${row.avg_daily_units.toFixed(1)}/day`],
             ['Recommended shipment', fmt(row.units_to_send), 'Target stock − projected available'],
           ].map(([label, value, note], index) => (
@@ -612,7 +626,7 @@ function FbaDecisionPanel({
         </div>
         {row.excluded_inventory > 0 && (
           <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'rgba(245,158,11,0.06)', color: 'var(--text-muted)', fontSize: '11px', lineHeight: 1.5 }}>
-            {fmt(row.excluded_inventory)} units in reserved, unsellable, or researching status are included in Amazon's Total FBA number but excluded from replenishment coverage because they are not currently available to satisfy a new order.
+            {fmt(row.excluded_inventory)} customer-order, unfulfillable, or researching units are included in Amazon's Total FBA number but excluded from replenishment coverage.
           </div>
         )}
       </div>
@@ -1025,15 +1039,18 @@ export default function Inventory() {
           reservedCustOrders != null ||
           reservedFcTransfers != null ||
           reservedFcProcessing != null
+        const reservedBreakdownComplete =
+          reservedCustOrders != null &&
+          reservedFcTransfers != null &&
+          reservedFcProcessing != null
         const reserved = hasBreakdown
           ? (reservedCustOrders || 0) + (reservedFcTransfers || 0) + (reservedFcProcessing || 0)
           : (row.reserved_quantity || 0)
 
-        // Total FBA matches Amazon Seller Central's "Total" inventory view:
-        // every unit currently in Amazon's fulfillment network, regardless of
-        // sellability status. Includes researching + unsellable so the number
-        // reconciles with the UI.
-        const totalFba = fulfillable + inbound + reserved + unsellable + researching
+        // Amazon's inventory breakdown is additive: Available + Inbound +
+        // Reserved + Unfulfillable + Researching. Starting with fulfillable
+        // would overlap reserved inventory and double count it.
+        const totalFba = available + inbound + reserved + unsellable + researching
         const doc = avgDailyUnits > 0 ? Math.floor(available / avgDailyUnits) : null
 
         return {
@@ -1044,6 +1061,10 @@ export default function Inventory() {
           fulfillable,
           available,
           reserved,
+          reserved_customer_orders: reservedCustOrders || 0,
+          reserved_fc_transfers: reservedFcTransfers || 0,
+          reserved_fc_processing: reservedFcProcessing || 0,
+          reserved_breakdown_complete: reservedBreakdownComplete,
           inbound,
           total_fba:     totalFba,
           unsellable,
@@ -1108,7 +1129,7 @@ export default function Inventory() {
   const fbaRows: FbaReplenRow[] = inventory
     .map(r => {
       const totalInv = r.total_fba
-      const inventoryPosition = r.available + r.inbound
+      const inventoryPosition = r.available + r.inbound + r.reserved_fc_transfers + r.reserved_fc_processing
       const excludedInventory = Math.max(0, totalInv - inventoryPosition)
       const fbaDoc = r.avg_daily_units > 0 ? Math.floor(inventoryPosition / r.avg_daily_units) : null
       const targetUnits = r.avg_daily_units > 0 ? Math.ceil(fbaTarget * r.avg_daily_units) : 0
@@ -1121,6 +1142,10 @@ export default function Inventory() {
         sku: r.sku, title: r.title, asin: r.asin, marketplace: r.marketplace,
         total_inventory: totalInv, available: r.available, fulfillable: r.fulfillable,
         inbound: r.inbound, reserved: r.reserved,
+        reserved_customer_orders: r.reserved_customer_orders,
+        reserved_fc_transfers: r.reserved_fc_transfers,
+        reserved_fc_processing: r.reserved_fc_processing,
+        reserved_breakdown_complete: r.reserved_breakdown_complete,
         inventory_position: inventoryPosition,
         excluded_inventory: excludedInventory,
         target_units: targetUnits,
@@ -1470,6 +1495,13 @@ export default function Inventory() {
                   {' · '}FBA lead time: <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{fbaLeadDays}d</span>
                 </div>
               </div>
+
+              {inventory.some(row => !row.reserved_breakdown_complete) && (
+                <div style={{ marginBottom: '14px', padding: '11px 14px', borderRadius: '9px', border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', display: 'flex', gap: '9px', alignItems: 'flex-start', color: 'var(--text-muted)', fontSize: '12px', lineHeight: 1.5 }}>
+                  <AlertTriangle size={15} color="#F59E0B" style={{ flexShrink: 0, marginTop: '1px' }} />
+                  <div><strong style={{ color: 'var(--text-primary)' }}>FC-transfer inventory is missing from the latest Amazon reserved-inventory feed.</strong> Total FBA and shipment recommendations may be understated. Recommendations are marked provisional until the feed is repaired.</div>
+                </div>
+              )}
 
               {showFbaConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
