@@ -125,3 +125,76 @@ $function$
 
 revoke all on function public.get_native_account_fee_breakdown(date,date,text[]) from public;
 grant execute on function public.get_native_account_fee_breakdown(date,date,text[]) to anon,authenticated;
+
+
+-- Precompute account-level fee categories so the UI never scans the raw ledger.
+create index if not exists idx_int_finance_fee_breakdown
+  on public.int_finance_pnl_components (pnl_category, marketplace, sale_date, transaction_id)
+  include (raw_fee_type, amount_usd);
+
+create table if not exists public.fct_account_fee_daily (
+  sale_date date not null,
+  marketplace text not null,
+  fee_type text not null,
+  amount_usd numeric not null default 0,
+  transaction_count integer not null default 0,
+  loaded_at timestamptz not null default now(),
+  primary key (sale_date, marketplace, fee_type)
+);
+create index if not exists idx_fct_account_fee_daily_query
+  on public.fct_account_fee_daily (marketplace, sale_date, fee_type);
+alter table public.fct_account_fee_daily enable row level security;
+revoke all on public.fct_account_fee_daily from public, anon, authenticated;
+
+create or replace function public.rebuild_account_fee_daily(p_start date, p_end date)
+returns void language plpgsql security definer set search_path = ''
+as $$
+begin
+  if p_end < p_start then raise exception 'p_end must be on or after p_start'; end if;
+  delete from public.fct_account_fee_daily where sale_date between p_start and p_end;
+  insert into public.fct_account_fee_daily (sale_date, marketplace, fee_type, amount_usd, transaction_count)
+  select c.sale_date, c.marketplace, coalesce(nullif(c.raw_fee_type, ''), 'Other / correction'),
+    round(sum(c.amount_usd), 2), count(distinct c.transaction_id)::integer
+  from public.int_finance_pnl_components c
+  left join public.stg_amz_finance_transactions t
+    on t.marketplace = c.marketplace and t.transaction_id = c.transaction_id
+  where c.sale_date between p_start and p_end
+    and c.pnl_category = 'amazon_fees'
+    and nullif(btrim(coalesce(nullif(t.sku, ''), t.items #>> '{0,contexts,0,sku}')), '') is null
+  group by c.sale_date, c.marketplace, 3
+  having abs(sum(c.amount_usd)) >= 0.01;
+end;
+$$;
+revoke all on function public.rebuild_account_fee_daily(date, date) from public, anon, authenticated;
+
+create or replace function public.get_native_account_fee_breakdown(
+  p_start date, p_end date, p_markets text[] default array['US']::text[]
+)
+returns table (fee_type text, amount_usd numeric, transaction_count bigint)
+language sql stable security definer set search_path = ''
+as $$
+  select f.fee_type, round(sum(f.amount_usd), 2), sum(f.transaction_count)::bigint
+  from public.fct_account_fee_daily f
+  where f.sale_date between p_start and p_end and f.marketplace = any(p_markets)
+  group by f.fee_type having abs(sum(f.amount_usd)) >= 0.01
+  order by abs(sum(f.amount_usd)) desc;
+$$;
+revoke all on function public.get_native_account_fee_breakdown(date, date, text[]) from public;
+grant execute on function public.get_native_account_fee_breakdown(date, date, text[]) to anon, authenticated;
+
+create or replace function public.rebuild_finance_pnl_month(p_month date)
+returns void language plpgsql set search_path = ''
+as $$
+begin
+  perform public.rebuild_int_finance_pnl_month(p_month);
+  perform public.rebuild_fct_finance_pnl_month(p_month);
+  perform public.rebuild_agg_finance_pnl_counts_month(p_month);
+  perform public.rebuild_sku_finance_daily(p_month, (p_month + interval '1 month - 1 day')::date);
+  perform public.rebuild_account_fee_daily(p_month, (p_month + interval '1 month - 1 day')::date);
+end;
+$$;
+
+select public.rebuild_account_fee_daily(
+  (select min(sale_date) from public.int_finance_pnl_components),
+  (select max(sale_date) from public.int_finance_pnl_components)
+);
