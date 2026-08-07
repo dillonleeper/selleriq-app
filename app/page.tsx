@@ -15,8 +15,6 @@ import {
   Eye, Minus, MousePointer, BarChart2, Percent, Search, X
 } from 'lucide-react'
 
-const CAD_TO_USD = 0.74
-
 type WeeklyRow = {
   raw_date: string
   start_date: string
@@ -76,9 +74,6 @@ function fmtCurrency(n: number) {
   return (n < 0 ? '-$' : '$') + abs
 }
 function fmtASP(n: number) { return '$' + n.toFixed(2) }
-function toUSD(amount: number, marketplace: string) {
-  return marketplace === 'CA' ? amount * CAD_TO_USD : amount
-}
 function fmtDateLabel(iso: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
@@ -104,9 +99,24 @@ function monthStartKey(dateStr: string): string {
   return dateStr.slice(0, 7) + '-01'
 }
 
+function addDaysKey(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + days)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function bucketEndKey(start: string, bucket: ChartBucket): string {
+  if (bucket === 'week') return addDaysKey(start, 6)
+  if (bucket === 'month') {
+    const d = new Date(start + 'T12:00:00')
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()).padStart(2, '0')}`
+  }
+  return start
+}
+
 // Re-bucket the per-day series into daily / weekly / monthly points for the charts.
 // Totals are bucket-independent, so summary cards are unaffected by this control.
-function bucketSeries(rows: WeeklyRow[], bucket: ChartBucket): ChartPoint[] {
+function bucketSeries(rows: WeeklyRow[], bucket: ChartBucket, rangeStart: string, effectiveEnd: string): { complete: ChartPoint[], partial: ChartPoint | null } {
   const keyFn =
     bucket === 'week' ? weekStartKey :
     bucket === 'month' ? monthStartKey :
@@ -126,13 +136,23 @@ function bucketSeries(rows: WeeklyRow[], bucket: ChartBucket): ChartPoint[] {
     b.total_sessions += r.total_sessions
     b.total_page_views += r.total_page_views
   }
-  return Object.values(buckets)
+  const points = Object.values(buckets)
     .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
     .map(b => ({
       ...b,
       label: bucket === 'month' ? monthLabel(b.raw_date) : shortLabel(b.raw_date),
       conv_rate: b.total_sessions > 0 ? (b.total_units / b.total_sessions) * 100 : 0,
     }))
+  if (bucket === 'day') return { complete: points, partial: null }
+
+  const openingAligned = keyFn(rangeStart) === rangeStart
+  const eligible = openingAligned ? points : points.filter(point => point.raw_date !== keyFn(rangeStart))
+  const last = eligible.at(-1)
+  const hasClosingPartial = !!last && bucketEndKey(last.raw_date, bucket) > effectiveEnd
+  return {
+    complete: hasClosingPartial ? eligible.slice(0, -1) : eligible,
+    partial: hasClosingPartial ? last : null,
+  }
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -160,6 +180,8 @@ export default function SalesOverview() {
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
   const [chartBucket, setChartBucket] = useState<ChartBucket>('week')
   const [loading, setLoading] = useState(true)
+  const [overviewError, setOverviewError] = useState<string | null>(null)
+  const [dataThrough, setDataThrough] = useState<string | null>(null)
   // Finance P&L breakdown (null = not loaded yet; [] = loaded, no rows for range).
   const [finance, setFinance] = useState<FinanceRow[] | null>(null)
   // Whether the last get_finance_pnl call errored (e.g. timeout). Kept separate
@@ -233,78 +255,83 @@ export default function SalesOverview() {
 
   // Main data fetch
   useEffect(() => {
-    if (!dateRange || !dateRange.startDate) return
+    if (!dateRange?.startDate) return
     let cancelled = false
     async function load() {
       const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
+      setOverviewError(null)
 
-      const { data: overviewRows, error } = await supabase.rpc('get_sales_overview', {
-        p_start: startDate,
-        p_end: endDate,
-        p_prior_start: priorStart,
-        p_prior_end: priorEnd,
-        p_markets: markets,
-        p_skus: selectedProducts.length ? selectedProducts.map(p => p.sku) : null,
-      })
-      if (cancelled) return
-      if (error) { console.error(error); setLoading(false); return }
+      try {
+        const p_marketplace = markets.length === 1 ? markets[0] : null
+        const [overviewResult, financeResult, freshnessResults] = await Promise.all([
+          supabase.rpc('get_sales_overview', {
+            p_start: startDate, p_end: endDate,
+            p_prior_start: priorStart, p_prior_end: priorEnd,
+            p_markets: markets,
+            p_skus: selectedProducts.length ? selectedProducts.map(p => p.sku) : null,
+          }),
+          supabase.rpc('get_finance_pnl', { p_start: startDate, p_end: endDate, p_marketplace }),
+          Promise.all(markets.map(marketplace => supabase
+            .from('fct_sales_daily')
+            .select('start_date')
+            .eq('marketplace', marketplace)
+            .order('start_date', { ascending: false })
+            .limit(1)
+            .maybeSingle())),
+        ])
+        if (cancelled) return
 
-      const typedOverviewRows = (overviewRows || []) as OverviewRpcRow[]
-      const toLegacyRow = (row: OverviewRpcRow) => ({
-        start_date: row.start_date,
-        marketplace: 'US', // revenue is already normalized to USD by the RPC
-        ordered_product_sales_amount: Number(row.revenue) || 0,
-        units_ordered: Number(row.units) || 0,
-        sessions: Number(row.sessions) || 0,
-        page_views: Number(row.page_views) || 0,
-      })
-      const data = typedOverviewRows.filter(row => row.period === 'current').map(toLegacyRow)
-
-      // Prior period
-      const prevRows = typedOverviewRows.filter(row => row.period === 'prior').map(toLegacyRow)
-
-      // Aggregate to a per-day, marketplace-combined series. The chart-bucket
-      // control re-buckets this client-side; summary totals sum it directly.
-      const aggregate = (rows: any[], clipStart?: string): WeeklyRow[] => {
-        const buckets: Record<string, WeeklyRow> = {}
-        for (const row of rows) {
-          const key = row.start_date
-          if (!buckets[key]) {
-            buckets[key] = {
-              raw_date: key,
-              start_date: shortLabel(key),
-              total_revenue: 0, total_units: 0, total_sessions: 0, total_page_views: 0,
-            }
-          }
-          buckets[key].total_revenue += toUSD(row.ordered_product_sales_amount || 0, row.marketplace)
-          buckets[key].total_units += row.units_ordered || 0
-          buckets[key].total_sessions += row.sessions || 0
-          buckets[key].total_page_views += row.page_views || 0
+        if (overviewResult.error) {
+          console.error(overviewResult.error)
+          setOverviewError(overviewResult.error.message)
+          setDailySeries([])
+          setPrevData([])
+          setDataThrough(null)
+        } else {
+          const rows = (overviewResult.data || []) as OverviewRpcRow[]
+          const aggregate = (period: OverviewRpcRow['period']): WeeklyRow[] => rows
+            .filter(row => row.period === period)
+            .map(row => ({
+              raw_date: row.start_date,
+              start_date: shortLabel(row.start_date),
+              total_revenue: Math.round(Number(row.revenue) || 0),
+              total_units: Number(row.units) || 0,
+              total_sessions: Number(row.sessions) || 0,
+              total_page_views: Number(row.page_views) || 0,
+            }))
+          const currentRows = aggregate('current')
+          setDailySeries(currentRows)
+          setPrevData(aggregate('prior'))
+          const marketplaceCutoffs = freshnessResults
+            .filter(result => !result.error && result.data?.start_date)
+            .map(result => result.data!.start_date as string)
+          setDataThrough(marketplaceCutoffs.length === markets.length
+            ? marketplaceCutoffs.reduce((oldest, value) => value < oldest ? value : oldest)
+            : null)
         }
-        return Object.values(buckets)
-          .sort((a, b) => a.raw_date.localeCompare(b.raw_date))
-          .filter(w => !clipStart || w.raw_date >= clipStart)
-          .map(w => ({ ...w, total_revenue: Math.round(w.total_revenue) }))
+
+        if (financeResult.error) {
+          console.error(financeResult.error)
+          setFinanceError(true)
+          setFinance([])
+        } else {
+          setFinanceError(false)
+          setFinance((financeResult.data || []) as FinanceRow[])
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error(error)
+          setOverviewError(error instanceof Error ? error.message : 'Unexpected request failure')
+          setDailySeries([])
+          setPrevData([])
+          setDataThrough(null)
+          setFinanceError(true)
+          setFinance([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-
-      setDailySeries(aggregate(data || [], startDate))
-      setPrevData(aggregate(prevRows, priorStart))
-
-      // Finance P&L breakdown — period totals in USD (no toUSD). The RPC has no
-      // SKU param (period-grain); the widget hides when a SKU filter is active,
-      // so we don't pass selectedProducts here. p_marketplace: single when one
-      // market is selected, else null = all (US/CA are the only markets).
-      const p_marketplace = markets.length === 1 ? markets[0] : null
-      const { data: fin, error: finErr } = await supabase.rpc('get_finance_pnl', {
-        p_start: startDate,
-        p_end: endDate,
-        p_marketplace,
-      })
-      if (finErr) { console.error(finErr); setFinanceError(true); setFinance([]) }
-      else { setFinanceError(false); setFinance((fin || []) as FinanceRow[]) }
-
-      setLoading(false)
     }
     load()
     return () => { cancelled = true }
@@ -328,8 +355,14 @@ export default function SalesOverview() {
   const trend = (curr: number, prev: number) => prev > 0 ? ((curr - prev) / prev) * 100 : null
   const rangeLabel = dateRange ? PRESET_LABELS[dateRange.preset] : ''
 
-  // Chart series for the selected bucketing (shared by all three charts).
-  const chartData = bucketSeries(dailySeries, chartBucket)
+  // Full calendar buckets drive the trend. A closing partial bucket is shown
+  // separately so WTD/MTD activity cannot look like a sudden collapse.
+  const effectiveEnd = dataThrough && dateRange ? (dataThrough < dateRange.endDate ? dataThrough : dateRange.endDate) : dateRange?.endDate || ''
+  const bucketed = dateRange?.startDate && effectiveEnd
+    ? bucketSeries(dailySeries, chartBucket, dateRange.startDate, effectiveEnd)
+    : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
+  const chartData = bucketed.complete
+  const partialChartPoint = bucketed.partial
   const bucketAdj = chartBucket === 'day' ? 'Daily' : chartBucket === 'week' ? 'Weekly' : 'Monthly'
 
   // ─── Total Sales Breakdown (finance settlement P&L, from get_finance_pnl) ───
@@ -387,6 +420,11 @@ export default function SalesOverview() {
                 ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}`
                 : 'Select a date range'}
             </span>
+            {dataThrough && (
+              <span style={{ marginLeft: 10, color: dataThrough < (dateRange?.endDate || dataThrough) ? 'var(--amber)' : 'var(--text-dim)' }}>
+                Data through {fmtDateLabel(dataThrough)}
+              </span>
+            )}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
@@ -529,6 +567,10 @@ export default function SalesOverview() {
 
       {loading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
+      ) : overviewError ? (
+        <div className="card" role="alert" style={{ padding: 24, color: 'var(--red)' }}>
+          Sales Overview could not refresh. No prior results are being shown. {overviewError}
+        </div>
       ) : (
         <>
           {/* 6 Summary Cards */}
@@ -581,6 +623,7 @@ export default function SalesOverview() {
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   USD · {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
+                  {chartBucket !== 'day' && ' · trend uses complete calendar periods'}
                 </div>
               </div>
               {/* Chart-only bucketing control */}
@@ -596,6 +639,13 @@ export default function SalesOverview() {
                 ))}
               </div>
             </div>
+            {partialChartPoint && (
+              <div style={{ marginBottom: 12, padding: '8px 10px', border: '1px dashed var(--border)', borderRadius: 6, color: 'var(--text-muted)', fontSize: 11 }}>
+                Current {chartBucket === 'week' ? 'week to date' : 'month to date'} ({shortLabel(partialChartPoint.raw_date)}–{shortLabel(effectiveEnd)}):{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>{fmtCurrency(partialChartPoint.total_revenue)}</strong> revenue ·{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>{fmtUnits(partialChartPoint.total_units)}</strong> units. Kept out of the full-period trend.
+              </div>
+            )}
             <ResponsiveContainer width="100%" height={240}>
               <ComposedChart data={chartData}>
                 <defs>
@@ -662,19 +712,18 @@ export default function SalesOverview() {
             </div>
           </div>
 
-          {/* Total Sales Breakdown */}
-          <div className="card" style={{ padding: '24px' }}>
+          {/* Settlement accounting is intentionally separated from ordered demand. */}
+          <div className="card" style={{ padding: '24px', borderLeft: '3px solid var(--yellow)' }}>
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Total Sales Breakdown</div>
+              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Settlement activity (account-level)</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Finance settlement P&amp;L (USD) · &ldquo;Gross sales&rdquo; here is settlement product charges,
-                distinct from the ordered-revenue KPI above
+                Accounting feed in USD · different timing and scope from ordered revenue above. Use this to reconcile Amazon activity, not as a sales total.
               </div>
             </div>
 
             {skuFilterActive ? (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6, padding: '10px 0' }}>
-                Total Sales Breakdown reflects your whole account; per-SKU P&amp;L isn&rsquo;t available yet.
+                Settlement activity reflects your whole account; per-SKU accounting isn&rsquo;t available yet.
                 Clear the product filter to see the account-level breakdown.
               </div>
             ) : financeError ? (
