@@ -260,13 +260,13 @@ export default function ProfitabilityPage() {
       style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 13px', marginBottom: showCoverage ? 0 : 14, border: '1px solid var(--border)', borderRadius: showCoverage ? '8px 8px 0 0' : 8, background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
     >
       <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 600 }}><CheckCircle2 size={14} style={{ color: 'var(--green)' }} />Data reconciliation</span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-muted)' }}>See account totals and SKU coverage {showCoverage ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-muted)' }}>See account totals and SKU attribution {showCoverage ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span>
     </button>
 
     {showCoverage && <div className="card" style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0, marginBottom: 14, overflow: 'hidden' }}>
       <div style={{ overflowX: 'auto' }}>
         <table className="profitability-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={{ textAlign: 'left' }}>Source category</th><th style={{ textAlign: 'right' }}>Account total</th><th style={{ textAlign: 'right' }}>Assigned to SKUs</th><th style={{ textAlign: 'right' }}>Unallocated</th><th style={{ textAlign: 'right' }}>Coverage</th></tr></thead>
+          <thead><tr><th style={{ textAlign: 'left' }}>Source category</th><th style={{ textAlign: 'right' }}>Account total</th><th style={{ textAlign: 'right' }}>Assigned to SKUs</th><th style={{ textAlign: 'right' }}>Account-level</th><th style={{ textAlign: 'right' }}>SKU attribution</th></tr></thead>
           <tbody>{coverage.filter(item => INCLUDED_CATEGORIES.includes(item.pnl_category) || item.pnl_category === 'advertising_cost').map(item => {
             const account = n(item.account_amount)
             const allocated = n(item.sku_allocated_amount)
@@ -301,16 +301,22 @@ export default function ProfitabilityPage() {
     <div className="card" style={{ overflow: 'hidden' }}>
       {loading ? <div style={{ minHeight: 320, display: 'grid', placeItems: 'center' }}><div style={{ textAlign: 'center' }}><LoaderCircle className="cadence-loading-spinner" size={28} style={{ color: 'var(--accent)', margin: '0 auto 10px' }} /><div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Reconciling Amazon finance data</div><div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Assigning signed ledger components to SKUs…</div></div></div>
       : error ? <div style={{ minHeight: 260, display: 'grid', placeItems: 'center', textAlign: 'center', padding: 24 }}><div><AlertCircle size={24} style={{ color: 'var(--red)', marginBottom: 8 }} /><div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Could not load profitability data</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)' }}>{error}</div></div></div>
-      : <div style={{ overflowX: 'auto', maxHeight: '68vh', overflowY: 'auto' }}>
-        <table className="profitability-table" style={{ width: '100%', minWidth: 1060, borderCollapse: 'collapse' }}>
-          <thead><tr><th style={{ textAlign: 'left', minWidth: 300 }}>Product</th><th style={{ textAlign: 'center' }}>Market</th><th style={{ textAlign: 'right' }}>Gross sales</th><th style={{ textAlign: 'right' }}>Promotions</th><th style={{ textAlign: 'right' }}>Refunds</th><th style={{ textAlign: 'right' }}>Amazon fees</th><th style={{ textAlign: 'right' }}>Shipping</th><th style={{ textAlign: 'right' }}>Reimbursements</th><th style={{ textAlign: 'right' }}>Net proceeds</th><th style={{ width: 28 }} /></tr></thead>
+      : <div style={{ overflowX: 'hidden', maxHeight: '68vh', overflowY: 'auto' }}>
+        <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <colgroup>
+            <col style={{ width: '26%' }} /><col style={{ width: '5%' }} /><col style={{ width: '9%' }} />
+            <col style={{ width: '9%' }} /><col style={{ width: '8%' }} /><col style={{ width: '9%' }} />
+            <col style={{ width: '8%' }} /><col style={{ width: '11%' }} /><col style={{ width: '11%' }} />
+            <col style={{ width: '4%' }} />
+          </colgroup>
+          <thead><tr><th style={{ textAlign: 'left' }}>Product</th><th style={{ textAlign: 'center' }}>Market</th><th style={{ textAlign: 'right' }}>Gross sales</th><th style={{ textAlign: 'right' }}>Promotions</th><th style={{ textAlign: 'right' }}>Refunds</th><th style={{ textAlign: 'right' }}>Amazon fees</th><th style={{ textAlign: 'right' }}>Shipping</th><th style={{ textAlign: 'right' }}>Reimbursements</th><th style={{ textAlign: 'right' }}>Net proceeds</th><th style={{ width: 28 }} /></tr></thead>
           <tbody>{visibleRows.map(row => {
             const key = `${row.marketplace}:${row.sku}`
             const expanded = expandedKey === key
             const hasActivity = n(row.transaction_count) > 0
             return <React.Fragment key={key}>
               <tr onClick={() => void toggleRow(row, key)} style={{ cursor: 'pointer', background: expanded ? 'var(--accent-light)' : undefined }}>
-                <td><div style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` · ${row.asin}` : ''}</div></td>
+                <td><div style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` · ${row.asin}` : ''}</div></td>
                 <td style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>{row.marketplace}</td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : '—'}</td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.promotions) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.promotions) : '—'}</td>
@@ -342,8 +348,9 @@ export default function ProfitabilityPage() {
                     {transactionErrors[key] ? <div style={{ padding: 10, color: 'var(--red)', fontSize: 10 }}>{transactionErrors[key]}</div>
                     : transactionLoadingKey === key ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>Loading transaction evidence…</div>
                     : (transactionsByKey[key] || []).length === 0 ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>No source transactions found for this SKU and period.</div>
-                    : <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
-                      <table className="profitability-table" style={{ width: '100%', minWidth: 860, borderCollapse: 'collapse' }}>
+                    : <div style={{ overflowX: 'hidden', border: '1px solid var(--border)', borderRadius: 6 }}>
+                      <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                        <colgroup><col style={{ width: '12%' }} /><col style={{ width: '24%' }} /><col style={{ width: '22%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '12%' }} /></colgroup>
                         <thead><tr><th style={{ textAlign: 'left' }}>Date</th><th style={{ textAlign: 'left' }}>Order</th><th style={{ textAlign: 'left' }}>Type / status</th><th style={{ textAlign: 'right' }}>Sales</th><th style={{ textAlign: 'right' }}>Refunds</th><th style={{ textAlign: 'right' }}>Fees</th><th style={{ textAlign: 'right' }}>Net proceeds</th></tr></thead>
                         <tbody>{(transactionsByKey[key] || []).map(transaction => <tr key={transaction.transaction_id}>
                           <td style={{ whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.sale_date}</td>
