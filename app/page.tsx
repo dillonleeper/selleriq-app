@@ -12,7 +12,7 @@ import {
   Tooltip, ResponsiveContainer,
   ComposedChart, AreaChart, Line
 } from 'recharts'
-import { Search, X } from 'lucide-react'
+import { LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
 
 type WeeklyRow = {
   raw_date: string
@@ -223,6 +223,7 @@ export default function SalesOverview() {
   const [chartBucket, setChartBucket] = useState<ChartBucket>('week')
   const [loading, setLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
+  const [retryToken, setRetryToken] = useState(0)
   const [dataThrough, setDataThrough] = useState<string | null>(null)
   const [salesFirstDate, setSalesFirstDate] = useState<string | null>(null)
   const [marketFreshness, setMarketFreshness] = useState<MarketFreshness[]>([])
@@ -431,7 +432,7 @@ export default function SalesOverview() {
     }
     load()
     return () => { cancelled = true }
-  }, [markets, dateRange, selectedProducts, comparisonMode, dataThrough])
+  }, [markets, dateRange, selectedProducts, comparisonMode, dataThrough, retryToken])
 
   const sum = (key: keyof WeeklyRow) => dailySeries.reduce((s, r) => s + (r[key] as number), 0)
   const prevSum = (key: keyof WeeklyRow) => prevData.reduce((s, r) => s + (r[key] as number), 0)
@@ -673,10 +674,20 @@ export default function SalesOverview() {
       </div>
 
       {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
+        <div className="card" style={{ minHeight: 300, display: 'grid', placeItems: 'center' }}>
+          <div style={{ textAlign: 'center' }}>
+            <LoaderCircle className="cadence-loading-spinner" size={28} style={{ color: 'var(--accent)', margin: '0 auto 10px' }} />
+            <div style={{ color: 'var(--text-primary)', fontSize: 12, fontWeight: 600 }}>Loading Sales Overview</div>
+            <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 10 }}>Calculating the selected period and comparison…</div>
+          </div>
+        </div>
       ) : overviewError ? (
-        <div className="card" role="alert" style={{ padding: 24, color: 'var(--red)' }}>
-          Sales Overview could not refresh. No prior results are being shown. {overviewError}
+        <div className="card" role="alert" style={{ padding: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18 }}>
+          <div>
+            <div style={{ color: 'var(--text-primary)', fontSize: 12, fontWeight: 700 }}>Sales Overview did not finish loading</div>
+            <div style={{ marginTop: 5, color: 'var(--text-muted)', fontSize: 10 }}>The request took longer than expected. Your data is safe; try the request again.</div>
+          </div>
+          <button onClick={() => setRetryToken(value => value + 1)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontSize: 10, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}><RefreshCw size={13} />Retry</button>
         </div>
       ) : (
         <>
