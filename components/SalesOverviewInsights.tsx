@@ -31,7 +31,9 @@ export type InventoryRisk = {
   available_quantity: number | string
   inbound_quantity: number | string
   units_per_day: number | string
+  available_days_of_cover: number | string
   days_of_cover: number | string
+  estimated_monthly_revenue: number | string
 }
 
 type Props = {
@@ -70,28 +72,41 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         const priorSessions = n(row.prior_sessions)
         const conversion = n(row.conversion_rate)
         const priorConversion = priorSessions > 0 ? (n(row.prior_units) / priorSessions) * 100 : 0
+        const revenuePerSession = sessions > 0 ? revenue / sessions : 0
+        const asp = n(row.units) > 0 ? revenue / n(row.units) : 0
         if (priorRevenueForSku > 0 && revenue < priorRevenueForSku * 0.8) {
-          actions.push({ key: `${row.sku}-revenue`, severity: priorRevenueForSku - revenue, icon: <ArrowDownRight size={14} />, title: `${row.sku} revenue declined`, detail: `${money(revenue - priorRevenueForSku)} vs ${comparisonLabel}` })
+          const sessionChange = priorSessions > 0 ? ((sessions - priorSessions) / priorSessions) * 100 : 0
+          const conversionChange = conversion - priorConversion
+          const likelyDriver = sessionChange < -10
+            ? `sessions ${percent(sessionChange)}`
+            : conversionChange < -1
+              ? `conversion ${conversionChange.toFixed(1)} points`
+              : n(row.buy_box_pct) > 0 && n(row.buy_box_pct) < 90
+                ? `Buy Box ${n(row.buy_box_pct).toFixed(1)}%`
+                : 'review pricing and demand mix'
+          actions.push({ key: `${row.sku}-revenue`, severity: priorRevenueForSku - revenue, icon: <ArrowDownRight size={14} />, title: `Investigate ${row.sku} revenue decline`, detail: `${money(priorRevenueForSku - revenue)} decline · likely driver: ${likelyDriver}` })
         }
         if (priorSessions > 0 && sessions < priorSessions * 0.8) {
-          actions.push({ key: `${row.sku}-traffic`, severity: priorSessions - sessions, icon: <EyeOff size={14} />, title: `${row.sku} lost traffic`, detail: `${percent(((sessions - priorSessions) / priorSessions) * 100)} sessions` })
+          actions.push({ key: `${row.sku}-traffic`, severity: (priorSessions - sessions) * revenuePerSession, icon: <EyeOff size={14} />, title: `Recover traffic for ${row.sku}`, detail: `${percent(((sessions - priorSessions) / priorSessions) * 100)} sessions · about ${money((priorSessions - sessions) * revenuePerSession)} revenue exposure` })
         }
         if (priorConversion > 0 && conversion < priorConversion - 1) {
-          actions.push({ key: `${row.sku}-conversion`, severity: (priorConversion - conversion) * 100, icon: <AlertTriangle size={14} />, title: `${row.sku} conversion deteriorated`, detail: `${(conversion - priorConversion).toFixed(1)} percentage points` })
+          const exposure = sessions * ((priorConversion - conversion) / 100) * asp
+          actions.push({ key: `${row.sku}-conversion`, severity: exposure, icon: <AlertTriangle size={14} />, title: `Fix conversion for ${row.sku}`, detail: `${(conversion - priorConversion).toFixed(1)} points · about ${money(exposure)} revenue exposure` })
         }
         if (n(row.buy_box_pct) > 0 && n(row.buy_box_pct) < 90) {
-          actions.push({ key: `${row.sku}-buybox`, severity: 90 - n(row.buy_box_pct), icon: <AlertTriangle size={14} />, title: `${row.sku} Buy Box is weak`, detail: `${n(row.buy_box_pct).toFixed(1)}% Buy Box ownership` })
+          const exposure = revenue * ((90 - n(row.buy_box_pct)) / 100)
+          actions.push({ key: `${row.sku}-buybox`, severity: exposure, icon: <AlertTriangle size={14} />, title: `Recover Buy Box for ${row.sku}`, detail: `${n(row.buy_box_pct).toFixed(1)}% ownership · about ${money(exposure)} revenue exposure` })
         }
-        return actions
+        return actions.sort((a, b) => b.severity - a.severity).slice(0, 1)
       })
     : []
 
   const inventoryActions = inventoryRisks.slice(0, 5).map(row => ({
     key: `${row.marketplace}-${row.sku}-stock`,
-    severity: 1000 - n(row.days_of_cover),
+    severity: n(row.estimated_monthly_revenue) * Math.max(0, (28 - n(row.days_of_cover)) / 28),
     icon: <Boxes size={14} />,
-    title: `${row.sku} stock risk (${row.marketplace})`,
-    detail: `${n(row.days_of_cover).toFixed(1)} days cover · ${Math.round(n(row.available_quantity))} available · ${Math.round(n(row.inbound_quantity))} inbound`,
+    title: `Reorder or expedite ${row.sku} (${row.marketplace})`,
+    detail: `${n(row.days_of_cover).toFixed(1)} projected days cover including inbound · ${money(n(row.estimated_monthly_revenue))}/mo revenue exposed`,
   }))
   const actions = [...actionRows, ...inventoryActions].sort((a, b) => b.severity - a.severity).slice(0, 8)
 
@@ -153,7 +168,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600 }}>Recommended actions</div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Ranked from sales, traffic, Buy Box, and latest inventory evidence.</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Active, selling listings only · ranked by estimated revenue impact.</div>
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>Ads and profitability remain gated until source data is verified.</div>
         </div>

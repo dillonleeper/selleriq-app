@@ -6,15 +6,13 @@ import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import SalesOverviewInsights, { InventoryRisk, MarketDriver, SkuDriver } from '@/components/SalesOverviewInsights'
+import SalesKpiHierarchy from '@/components/SalesKpiHierarchy'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
   ComposedChart, AreaChart, Line
 } from 'recharts'
-import {
-  TrendingUp, TrendingDown, DollarSign, ShoppingCart,
-  Eye, Minus, MousePointer, BarChart2, Percent, Search, X
-} from 'lucide-react'
+import { Search, X } from 'lucide-react'
 
 type WeeklyRow = {
   raw_date: string
@@ -36,19 +34,30 @@ type OverviewRpcRow = {
 
 type ComparisonMode = 'previous_period' | 'previous_year'
 type MarketFreshness = { marketplace: string; first_date: string | null; data_through: string | null }
-type OverviewInsights = {
-  meta: {
-    first_date: string | null
-    data_through: string | null
-    comparison_complete: boolean
-    market_freshness: MarketFreshness[]
-    currency: 'USD'
-    fx_method: 'effective_dated'
-  }
-  series: OverviewRpcRow[]
-  sku_drivers: SkuDriver[]
-  market_drivers: MarketDriver[]
-  inventory_risks: InventoryRisk[]
+type OverviewMeta = {
+  first_date: string | null
+  data_through: string | null
+  comparison_complete: boolean
+  market_freshness: MarketFreshness[]
+  currency: 'USD'
+  fx_method: 'effective_dated'
+}
+type OverviewSummary = {
+  buy_box_pct: number | string | null
+  prior_buy_box_pct: number | string | null
+  selling_skus: number | string | null
+}
+type SkuSummaryRpcRow = {
+  sku: string
+  title: string
+  sessions: number | string | null
+  units: number | string | null
+  revenue: number | string | null
+  conv_rate: number | string | null
+  buy_box_pct: number | string | null
+  prev_sessions: number | string | null
+  prev_units: number | string | null
+  prev_revenue: number | string | null
 }
 
 // One P&L line from the get_finance_pnl RPC (dev). Amounts are already USD
@@ -90,7 +99,6 @@ function fmtCurrency(n: number) {
   const abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
   return (n < 0 ? '-$' : '$') + abs
 }
-function fmtASP(n: number) { return '$' + n.toFixed(2) }
 function fmtDateLabel(iso: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
@@ -223,6 +231,7 @@ export default function SalesOverview() {
   const [skuDrivers, setSkuDrivers] = useState<SkuDriver[]>([])
   const [marketDrivers, setMarketDrivers] = useState<MarketDriver[]>([])
   const [inventoryRisks, setInventoryRisks] = useState<InventoryRisk[]>([])
+  const [overviewSummary, setOverviewSummary] = useState<OverviewSummary>({ buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
   // Finance P&L breakdown (null = not loaded yet; [] = loaded, no rows for range).
   const [finance, setFinance] = useState<FinanceRow[] | null>(null)
   // Whether the last get_finance_pnl call errored (e.g. timeout). Kept separate
@@ -315,20 +324,31 @@ export default function SalesOverview() {
 
       try {
         const p_marketplace = markets.length === 1 ? markets[0] : null
-        const [overviewResult, financeResult] = await Promise.all([
-          supabase.rpc('get_sales_overview_insights', {
-            p_start: startDate, p_end: currentEnd,
-            p_prior_start: priorStart, p_prior_end: priorEnd,
-            p_markets: markets,
-            p_skus: selectedProducts.length ? selectedProducts.map(p => p.sku) : null,
+        const sharedParams = {
+          p_start: startDate, p_end: currentEnd,
+          p_prior_start: priorStart, p_prior_end: priorEnd,
+          p_markets: markets,
+          p_skus: selectedProducts.length ? selectedProducts.map(p => p.sku) : null,
+        }
+        const [overviewResult, metaResult, summaryResult, skuResult, marketResult, inventoryResult, financeResult] = await Promise.all([
+          supabase.rpc('get_sales_overview', sharedParams),
+          supabase.rpc('get_sales_overview_meta', {
+            p_prior_start: priorStart, p_prior_end: priorEnd, p_markets: markets,
+          }),
+          supabase.rpc('get_sales_overview_summary', sharedParams),
+          supabase.rpc('get_sku_sales_summary', sharedParams),
+          supabase.rpc('get_sales_overview_market_drivers', sharedParams),
+          supabase.rpc('get_sales_overview_inventory_actions', {
+            p_end: currentEnd, p_markets: markets, p_skus: null,
           }),
           supabase.rpc('get_finance_pnl', { p_start: startDate, p_end: endDate, p_marketplace }),
         ])
         if (cancelled) return
 
-        if (overviewResult.error) {
-          console.error(overviewResult.error)
-          setOverviewError(overviewResult.error.message)
+        if (overviewResult.error || metaResult.error) {
+          const essentialError = overviewResult.error || metaResult.error
+          console.error(essentialError)
+          setOverviewError(essentialError?.message || 'Required overview data could not load')
           setDailySeries([])
           setPrevData([])
           setDataThrough(null)
@@ -338,9 +358,10 @@ export default function SalesOverview() {
           setSkuDrivers([])
           setMarketDrivers([])
           setInventoryRisks([])
+          setOverviewSummary({ buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
         } else {
-          const insights = overviewResult.data as OverviewInsights | null
-          const rows = insights?.series || []
+          const rows = (overviewResult.data || []) as OverviewRpcRow[]
+          const meta = metaResult.data as OverviewMeta | null
           const aggregate = (period: OverviewRpcRow['period']): WeeklyRow[] => rows
             .filter(row => row.period === period)
             .map(row => ({
@@ -351,16 +372,32 @@ export default function SalesOverview() {
               total_sessions: Number(row.sessions) || 0,
               total_page_views: Number(row.page_views) || 0,
             }))
-          const currentRows = aggregate('current')
-          setDailySeries(currentRows)
+          setDailySeries(aggregate('current'))
           setPrevData(aggregate('prior'))
-          setDataThrough(insights?.meta.data_through || null)
-          setSalesFirstDate(insights?.meta.first_date || null)
-          setMarketFreshness(insights?.meta.market_freshness || [])
-          setComparisonComplete(Boolean(insights?.meta.comparison_complete))
-          setSkuDrivers(insights?.sku_drivers || [])
-          setMarketDrivers(insights?.market_drivers || [])
-          setInventoryRisks(insights?.inventory_risks || [])
+          setDataThrough(meta?.data_through || null)
+          setSalesFirstDate(meta?.first_date || null)
+          setMarketFreshness(meta?.market_freshness || [])
+          setComparisonComplete(Boolean(meta?.comparison_complete))
+
+          if (summaryResult.error) console.error(summaryResult.error)
+          const summary = (summaryResult.data?.[0] || null) as OverviewSummary | null
+          setOverviewSummary(summary || { buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
+
+          if (skuResult.error) console.error(skuResult.error)
+          const driverRows = ((skuResult.data || []) as SkuSummaryRpcRow[]).map(row => ({
+            sku: row.sku, title: row.title,
+            revenue: row.revenue, prior_revenue: row.prev_revenue,
+            revenue_delta: Number(row.revenue) - Number(row.prev_revenue),
+            units: row.units, sessions: row.sessions,
+            prior_sessions: row.prev_sessions, prior_units: row.prev_units,
+            conversion_rate: row.conv_rate, buy_box_pct: row.buy_box_pct,
+          })).sort((a, b) => Math.abs(Number(b.revenue_delta)) - Math.abs(Number(a.revenue_delta))).slice(0, 20)
+          setSkuDrivers(driverRows)
+
+          if (marketResult.error) console.error(marketResult.error)
+          setMarketDrivers((marketResult.data || []) as MarketDriver[])
+          if (inventoryResult.error) console.error(inventoryResult.error)
+          setInventoryRisks((inventoryResult.data || []) as InventoryRisk[])
         }
 
         if (financeResult.error) {
@@ -384,6 +421,7 @@ export default function SalesOverview() {
           setSkuDrivers([])
           setMarketDrivers([])
           setInventoryRisks([])
+          setOverviewSummary({ buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
           setFinanceError(true)
           setFinance([])
         }
@@ -405,12 +443,12 @@ export default function SalesOverview() {
   const prevRevenue    = prevSum('total_revenue')
   const prevUnits      = prevSum('total_units')
   const prevSessions   = prevSum('total_sessions')
+  const prevPageViews  = prevSum('total_page_views')
 
   const asp          = totalUnits > 0 ? totalRevenue / totalUnits : 0
   const prevAsp      = prevUnits > 0 ? prevRevenue / prevUnits : 0
   const convRate     = totalSessions > 0 ? (totalUnits / totalSessions) * 100 : 0
   const prevConvRate = prevSessions > 0 ? (prevUnits / prevSessions) * 100 : 0
-  const trend = (curr: number, prev: number) => prev > 0 ? ((curr - prev) / prev) * 100 : null
   const rangeLabel = dateRange ? PRESET_LABELS[dateRange.preset] : ''
 
   // Full calendar buckets drive the trend. A closing partial bucket is shown
@@ -459,18 +497,7 @@ export default function SalesOverview() {
     { label: 'Bottom-line profit', value: null, strong: true },
   ] : []
 
-  // Preset-aware empty-state label for the prior-period comparison line.
   const comparisonLabel = comparisonMode === 'previous_year' ? 'previous year' : 'previous period'
-  const noPriorLabel = `No complete ${comparisonLabel}`
-
-  const cards = [
-    { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: comparisonComplete && prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(totalRevenue, prevRevenue) : null, icon: <DollarSign size={14} />, color: 'var(--accent)' },
-    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: comparisonComplete && prevUnits > 0 ? `${fmtUnits(prevUnits)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(totalUnits, prevUnits) : null, icon: <ShoppingCart size={14} />, color: 'var(--green)' },
-    { label: `Sessions (${rangeLabel})`, value: fmtUnits(totalSessions), sub: comparisonComplete && prevSessions > 0 ? `${fmtUnits(prevSessions)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(totalSessions, prevSessions) : null, icon: <Eye size={14} />, color: 'var(--yellow)' },
-    { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: comparisonComplete && prevAsp > 0 ? `${fmtASP(prevAsp)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(asp, prevAsp) : null, icon: <BarChart2 size={14} />, color: '#6366F1' },
-    { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: comparisonComplete && prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete && prevConvRate > 0 ? convRate - prevConvRate : null, trendSuffix: ' pp', icon: <Percent size={14} />, color: '#EC4899' },
-    { label: `Page Views (${rangeLabel})`, value: fmtUnits(totalPageViews), sub: 'total page views', trend: null, icon: <MousePointer size={14} />, color: '#10B981' },
-  ]
 
   const truncate = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + '…' : s
 
@@ -653,39 +680,22 @@ export default function SalesOverview() {
         </div>
       ) : (
         <>
-          {/* 6 Summary Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
-            {cards.map((card, i) => (
-              <div key={i} className={`card fade-up fade-up-delay-${Math.min(i + 1, 5)}`} style={{ padding: '18px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                    {card.label}
-                  </span>
-                  <div style={{ color: card.color, opacity: 0.6 }}>{card.icon}</div>
-                </div>
-                <div style={{ fontSize: '22px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '8px', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {card.value}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{card.sub}</span>
-                  {card.trend !== null && (
-                    <span style={{
-                      fontSize: '11px', fontWeight: 500,
-                      color: card.trend > 0 ? 'var(--green)' : card.trend < 0 ? 'var(--red)' : 'var(--text-muted)',
-                      display: 'flex', alignItems: 'center', gap: '2px',
-                    }}>
-                      {card.trend > 0 ? <TrendingUp size={11} /> : card.trend < 0 ? <TrendingDown size={11} /> : <Minus size={11} />}
-                      {Math.abs(card.trend).toFixed(1)}{card.trendSuffix || '%'}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="card" style={{ padding: '12px 16px', marginBottom: 14, borderStyle: 'dashed', fontSize: 11, color: 'var(--text-muted)' }}>
-            KPI trust gate: contribution profit, contribution margin, TACOS, and refund rate will move into the primary KPI row after the Sellerboard profitability and advertising imports reconcile. They are intentionally not shown as zeros.
-          </div>
+          <SalesKpiHierarchy
+            rangeLabel={rangeLabel}
+            comparisonLabel={comparisonLabel}
+            comparisonComplete={comparisonComplete && prevData.length > 0}
+            metrics={{
+              revenue: totalRevenue, priorRevenue: prevRevenue,
+              units: totalUnits, priorUnits: prevUnits,
+              sessions: totalSessions, priorSessions: prevSessions,
+              pageViews: totalPageViews, priorPageViews: prevPageViews,
+              asp, priorAsp: prevAsp,
+              conversion: convRate, priorConversion: prevConvRate,
+              buyBox: Number(overviewSummary.buy_box_pct) || 0,
+              priorBuyBox: Number(overviewSummary.prior_buy_box_pct) || 0,
+              sellingSkus: Number(overviewSummary.selling_skus) || 0,
+            }}
+          />
 
           <SalesOverviewInsights
             comparisonAvailable={comparisonComplete && prevData.length > 0}
