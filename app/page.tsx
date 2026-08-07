@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
+import SalesOverviewInsights, { InventoryRisk, MarketDriver, SkuDriver } from '@/components/SalesOverviewInsights'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -33,9 +34,25 @@ type OverviewRpcRow = {
   page_views: number | string
 }
 
+type ComparisonMode = 'previous_period' | 'previous_year'
+type MarketFreshness = { marketplace: string; first_date: string | null; data_through: string | null }
+type OverviewInsights = {
+  meta: {
+    first_date: string | null
+    data_through: string | null
+    comparison_complete: boolean
+    market_freshness: MarketFreshness[]
+    currency: 'USD'
+    fx_method: 'effective_dated'
+  }
+  series: OverviewRpcRow[]
+  sku_drivers: SkuDriver[]
+  market_drivers: MarketDriver[]
+  inventory_risks: InventoryRisk[]
+}
+
 // One P&L line from the get_finance_pnl RPC (dev). Amounts are already USD
-// (server-side CA→USD at the same 0.74 rate the KPI cards use — do NOT re-run
-// through toUSD).
+// (server-side effective-dated conversion — do not convert again in the client).
 type FinanceRow = {
   pnl_category: string
   widget_line: string
@@ -103,6 +120,23 @@ function addDaysKey(dateStr: string, days: number): string {
   const d = new Date(dateStr + 'T12:00:00')
   d.setDate(d.getDate() + days)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function yearShiftKey(dateStr: string, years: number): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  const month = d.getMonth()
+  d.setFullYear(d.getFullYear() + years)
+  if (d.getMonth() !== month) d.setDate(0)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function comparisonWindow(startDate: string, endDate: string, mode: ComparisonMode) {
+  if (mode === 'previous_year') {
+    return { priorStart: yearShiftKey(startDate, -1), priorEnd: yearShiftKey(endDate, -1) }
+  }
+  const days = Math.round((new Date(endDate + 'T12:00:00').getTime() - new Date(startDate + 'T12:00:00').getTime()) / 86_400_000) + 1
+  const priorEnd = addDaysKey(startDate, -1)
+  return { priorStart: addDaysKey(priorEnd, -(days - 1)), priorEnd }
 }
 
 function bucketEndKey(start: string, bucket: ChartBucket): string {
@@ -182,11 +216,26 @@ export default function SalesOverview() {
   const [loading, setLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [dataThrough, setDataThrough] = useState<string | null>(null)
+  const [salesFirstDate, setSalesFirstDate] = useState<string | null>(null)
+  const [marketFreshness, setMarketFreshness] = useState<MarketFreshness[]>([])
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('previous_period')
+  const [comparisonComplete, setComparisonComplete] = useState(false)
+  const [skuDrivers, setSkuDrivers] = useState<SkuDriver[]>([])
+  const [marketDrivers, setMarketDrivers] = useState<MarketDriver[]>([])
+  const [inventoryRisks, setInventoryRisks] = useState<InventoryRisk[]>([])
   // Finance P&L breakdown (null = not loaded yet; [] = loaded, no rows for range).
   const [finance, setFinance] = useState<FinanceRow[] | null>(null)
   // Whether the last get_finance_pnl call errored (e.g. timeout). Kept separate
   // from an empty result so a failed fetch isn't rendered as "no data exists".
   const [financeError, setFinanceError] = useState(false)
+
+  const priorYearAvailable = Boolean(dateRange?.startDate && salesFirstDate && yearShiftKey(dateRange.startDate, -1) >= salesFirstDate)
+
+  useEffect(() => {
+    if (comparisonMode === 'previous_year' && salesFirstDate && !priorYearAvailable) {
+      setComparisonMode('previous_period')
+    }
+  }, [comparisonMode, priorYearAvailable, salesFirstDate])
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -258,27 +307,22 @@ export default function SalesOverview() {
     if (!dateRange?.startDate) return
     let cancelled = false
     async function load() {
-      const { startDate, endDate, priorStart, priorEnd } = dateRange!
+      const { startDate, endDate } = dateRange!
+      const currentEnd = dataThrough && dataThrough < endDate ? dataThrough : endDate
+      const { priorStart, priorEnd } = comparisonWindow(startDate, currentEnd, comparisonMode)
       setLoading(true)
       setOverviewError(null)
 
       try {
         const p_marketplace = markets.length === 1 ? markets[0] : null
-        const [overviewResult, financeResult, freshnessResults] = await Promise.all([
-          supabase.rpc('get_sales_overview', {
-            p_start: startDate, p_end: endDate,
+        const [overviewResult, financeResult] = await Promise.all([
+          supabase.rpc('get_sales_overview_insights', {
+            p_start: startDate, p_end: currentEnd,
             p_prior_start: priorStart, p_prior_end: priorEnd,
             p_markets: markets,
             p_skus: selectedProducts.length ? selectedProducts.map(p => p.sku) : null,
           }),
           supabase.rpc('get_finance_pnl', { p_start: startDate, p_end: endDate, p_marketplace }),
-          Promise.all(markets.map(marketplace => supabase
-            .from('fct_sales_daily')
-            .select('start_date')
-            .eq('marketplace', marketplace)
-            .order('start_date', { ascending: false })
-            .limit(1)
-            .maybeSingle())),
         ])
         if (cancelled) return
 
@@ -288,8 +332,15 @@ export default function SalesOverview() {
           setDailySeries([])
           setPrevData([])
           setDataThrough(null)
+          setSalesFirstDate(null)
+          setMarketFreshness([])
+          setComparisonComplete(false)
+          setSkuDrivers([])
+          setMarketDrivers([])
+          setInventoryRisks([])
         } else {
-          const rows = (overviewResult.data || []) as OverviewRpcRow[]
+          const insights = overviewResult.data as OverviewInsights | null
+          const rows = insights?.series || []
           const aggregate = (period: OverviewRpcRow['period']): WeeklyRow[] => rows
             .filter(row => row.period === period)
             .map(row => ({
@@ -303,12 +354,13 @@ export default function SalesOverview() {
           const currentRows = aggregate('current')
           setDailySeries(currentRows)
           setPrevData(aggregate('prior'))
-          const marketplaceCutoffs = freshnessResults
-            .filter(result => !result.error && result.data?.start_date)
-            .map(result => result.data!.start_date as string)
-          setDataThrough(marketplaceCutoffs.length === markets.length
-            ? marketplaceCutoffs.reduce((oldest, value) => value < oldest ? value : oldest)
-            : null)
+          setDataThrough(insights?.meta.data_through || null)
+          setSalesFirstDate(insights?.meta.first_date || null)
+          setMarketFreshness(insights?.meta.market_freshness || [])
+          setComparisonComplete(Boolean(insights?.meta.comparison_complete))
+          setSkuDrivers(insights?.sku_drivers || [])
+          setMarketDrivers(insights?.market_drivers || [])
+          setInventoryRisks(insights?.inventory_risks || [])
         }
 
         if (financeResult.error) {
@@ -326,6 +378,12 @@ export default function SalesOverview() {
           setDailySeries([])
           setPrevData([])
           setDataThrough(null)
+          setSalesFirstDate(null)
+          setMarketFreshness([])
+          setComparisonComplete(false)
+          setSkuDrivers([])
+          setMarketDrivers([])
+          setInventoryRisks([])
           setFinanceError(true)
           setFinance([])
         }
@@ -335,7 +393,7 @@ export default function SalesOverview() {
     }
     load()
     return () => { cancelled = true }
-  }, [markets, dateRange, selectedProducts])
+  }, [markets, dateRange, selectedProducts, comparisonMode, dataThrough])
 
   const sum = (key: keyof WeeklyRow) => dailySeries.reduce((s, r) => s + (r[key] as number), 0)
   const prevSum = (key: keyof WeeklyRow) => prevData.reduce((s, r) => s + (r[key] as number), 0)
@@ -363,6 +421,17 @@ export default function SalesOverview() {
     : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
   const chartData = bucketed.complete
   const partialChartPoint = bucketed.partial
+  const priorBucketed = dateRange?.startDate && effectiveEnd
+    ? bucketSeries(prevData, chartBucket, comparisonWindow(dateRange.startDate, effectiveEnd, comparisonMode).priorStart, comparisonWindow(dateRange.startDate, effectiveEnd, comparisonMode).priorEnd)
+    : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
+  const priorByIndex = priorBucketed.complete
+  const comparisonChartData = chartData.map((point, index) => ({
+    ...point,
+    prior_revenue: priorByIndex[index]?.total_revenue,
+    prior_units: priorByIndex[index]?.total_units,
+    prior_sessions: priorByIndex[index]?.total_sessions,
+    prior_conv_rate: priorByIndex[index]?.conv_rate,
+  }))
   const bucketAdj = chartBucket === 'day' ? 'Daily' : chartBucket === 'week' ? 'Weekly' : 'Monthly'
 
   // ─── Total Sales Breakdown (finance settlement P&L, from get_finance_pnl) ───
@@ -391,16 +460,15 @@ export default function SalesOverview() {
   ] : []
 
   // Preset-aware empty-state label for the prior-period comparison line.
-  const noPriorLabel =
-    dateRange?.preset === 'ytd' ? 'No prior year data'
-    : 'No prior period'
+  const comparisonLabel = comparisonMode === 'previous_year' ? 'previous year' : 'previous period'
+  const noPriorLabel = `No complete ${comparisonLabel}`
 
   const cards = [
-    { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} prior period` : noPriorLabel, trend: trend(totalRevenue, prevRevenue), icon: <DollarSign size={14} />, color: 'var(--accent)' },
-    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: prevUnits > 0 ? `${fmtUnits(prevUnits)} prior period` : noPriorLabel, trend: trend(totalUnits, prevUnits), icon: <ShoppingCart size={14} />, color: 'var(--green)' },
-    { label: `Sessions (${rangeLabel})`, value: fmtUnits(totalSessions), sub: prevSessions > 0 ? `${fmtUnits(prevSessions)} prior period` : noPriorLabel, trend: trend(totalSessions, prevSessions), icon: <Eye size={14} />, color: 'var(--yellow)' },
-    { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: prevAsp > 0 ? `${fmtASP(prevAsp)} prior period` : noPriorLabel, trend: trend(asp, prevAsp), icon: <BarChart2 size={14} />, color: '#6366F1' },
-    { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% prior period` : noPriorLabel, trend: trend(convRate, prevConvRate), icon: <Percent size={14} />, color: '#EC4899' },
+    { label: `Revenue (${rangeLabel})`, value: fmtCurrency(totalRevenue), sub: comparisonComplete && prevRevenue > 0 ? `${fmtCurrency(prevRevenue)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(totalRevenue, prevRevenue) : null, icon: <DollarSign size={14} />, color: 'var(--accent)' },
+    { label: `Units Ordered (${rangeLabel})`, value: fmtUnits(totalUnits), sub: comparisonComplete && prevUnits > 0 ? `${fmtUnits(prevUnits)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(totalUnits, prevUnits) : null, icon: <ShoppingCart size={14} />, color: 'var(--green)' },
+    { label: `Sessions (${rangeLabel})`, value: fmtUnits(totalSessions), sub: comparisonComplete && prevSessions > 0 ? `${fmtUnits(prevSessions)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(totalSessions, prevSessions) : null, icon: <Eye size={14} />, color: 'var(--yellow)' },
+    { label: `Avg Selling Price (${rangeLabel})`, value: fmtASP(asp), sub: comparisonComplete && prevAsp > 0 ? `${fmtASP(prevAsp)} ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete ? trend(asp, prevAsp) : null, icon: <BarChart2 size={14} />, color: '#6366F1' },
+    { label: `Conversion Rate (${rangeLabel})`, value: convRate.toFixed(2) + '%', sub: comparisonComplete && prevConvRate > 0 ? `${prevConvRate.toFixed(2)}% ${comparisonLabel}` : noPriorLabel, trend: comparisonComplete && prevConvRate > 0 ? convRate - prevConvRate : null, trendSuffix: ' pp', icon: <Percent size={14} />, color: '#EC4899' },
     { label: `Page Views (${rangeLabel})`, value: fmtUnits(totalPageViews), sub: 'total page views', trend: null, icon: <MousePointer size={14} />, color: '#10B981' },
   ]
 
@@ -425,10 +493,22 @@ export default function SalesOverview() {
                 Data through {fmtDateLabel(dataThrough)}
               </span>
             )}
+            {marketFreshness.length > 1 && (
+              <span title={marketFreshness.map(row => `${row.marketplace}: ${row.data_through ? fmtDateLabel(row.data_through) : 'unavailable'}`).join('\n')} style={{ marginLeft: 10, color: 'var(--text-dim)', cursor: 'help' }}>
+                Marketplace freshness ⓘ
+              </span>
+            )}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
           <DateRangeFilter onChange={setDateRange} defaultPreset="ytd" />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            Compare
+            <select value={comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 11 }}>
+              <option value="previous_period">Previous period</option>
+              <option value="previous_year" disabled={salesFirstDate !== null && !priorYearAvailable}>Previous year{salesFirstDate !== null && !priorYearAvailable ? ' (unavailable)' : ''}</option>
+            </select>
+          </label>
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
         </div>
       </div>
@@ -595,13 +675,26 @@ export default function SalesOverview() {
                       display: 'flex', alignItems: 'center', gap: '2px',
                     }}>
                       {card.trend > 0 ? <TrendingUp size={11} /> : card.trend < 0 ? <TrendingDown size={11} /> : <Minus size={11} />}
-                      {Math.abs(card.trend).toFixed(1)}%
+                      {Math.abs(card.trend).toFixed(1)}{card.trendSuffix || '%'}
                     </span>
                   )}
                 </div>
               </div>
             ))}
           </div>
+
+          <div className="card" style={{ padding: '12px 16px', marginBottom: 14, borderStyle: 'dashed', fontSize: 11, color: 'var(--text-muted)' }}>
+            KPI trust gate: contribution profit, contribution margin, TACOS, and refund rate will move into the primary KPI row after the Sellerboard profitability and advertising imports reconcile. They are intentionally not shown as zeros.
+          </div>
+
+          <SalesOverviewInsights
+            comparisonAvailable={comparisonComplete && prevData.length > 0}
+            comparisonLabel={comparisonLabel}
+            skuDrivers={skuDrivers}
+            marketDrivers={marketDrivers}
+            inventoryRisks={inventoryRisks}
+            metrics={{ sessions: totalSessions, priorSessions: prevSessions, conversion: convRate, priorConversion: prevConvRate, asp, priorAsp: prevAsp }}
+          />
 
           {/* Revenue + Units (dual-axis) with bucketing toggle */}
           <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
@@ -647,7 +740,7 @@ export default function SalesOverview() {
               </div>
             )}
             <ResponsiveContainer width="100%" height={240}>
-              <ComposedChart data={chartData}>
+              <ComposedChart data={comparisonChartData}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
@@ -661,6 +754,7 @@ export default function SalesOverview() {
                 <Tooltip content={<CustomTooltip />} />
                 <Area yAxisId="rev" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
                 <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={1.5} dot={false} />
+                {comparisonComplete && <Line yAxisId="rev" type="monotone" dataKey="prior_revenue" name={`Revenue (${comparisonLabel})`} stroke="var(--text-dim)" strokeWidth={1.2} strokeDasharray="5 4" dot={false} />}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -673,7 +767,7 @@ export default function SalesOverview() {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} · all selected marketplaces combined</div>
               </div>
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={chartData}>
+                <AreaChart data={comparisonChartData}>
                   <defs>
                     <linearGradient id="sessGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="var(--yellow)" stopOpacity={0.9} />
@@ -685,6 +779,7 @@ export default function SalesOverview() {
                   <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
                   <Tooltip content={<CustomTooltip />} />
                   <Area type="monotone" dataKey="total_sessions" name="Sessions" stroke="var(--yellow)" strokeWidth={1.5} fill="url(#sessGrad)" dot={false} />
+                  {comparisonComplete && <Line type="monotone" dataKey="prior_sessions" name={`Sessions (${comparisonLabel})`} stroke="var(--text-dim)" strokeDasharray="5 4" dot={false} />}
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -695,7 +790,7 @@ export default function SalesOverview() {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} · units ÷ sessions</div>
               </div>
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={chartData}>
+                <AreaChart data={comparisonChartData}>
                   <defs>
                     <linearGradient id="convGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#EC4899" stopOpacity={0.9} />
@@ -707,6 +802,7 @@ export default function SalesOverview() {
                   <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.toFixed(1) + '%'} width={50} />
                   <Tooltip content={<CustomTooltip />} />
                   <Area type="monotone" dataKey="conv_rate" name="Conversion Rate" stroke="#EC4899" strokeWidth={1.5} fill="url(#convGrad)" dot={false} />
+                  {comparisonComplete && <Line type="monotone" dataKey="prior_conv_rate" name={`Conversion Rate (${comparisonLabel})`} stroke="var(--text-dim)" strokeDasharray="5 4" dot={false} />}
                 </AreaChart>
               </ResponsiveContainer>
             </div>

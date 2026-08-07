@@ -15,7 +15,6 @@ import {
 } from 'recharts'
 
 // ─── Constants ───────────────────────────────────────────────
-const CAD_TO_USD = 0.74
 const LOW_STOCK_THRESHOLD   = 30
 const CRITICAL_THRESHOLD    = 14
 const FBA_TARGET_DEFAULT      = 60
