@@ -554,7 +554,7 @@ function FbaDecisionPanel({
     ? 'No FBA shipment needed'
     : sendNow
       ? `Send ${fmt(row.units_to_send)} units now`
-      : `Send ${fmt(row.units_to_send)} units by ${addDays(shipByDays)}`
+      : `Send ${fmt(row.units_to_send)} units by ${addDays(shipByDays ?? 0)}`
 
   return (
     <div style={{ padding: '18px 20px 20px', background: 'var(--bg-card)', borderTop: '1px solid var(--border)' }}>
