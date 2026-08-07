@@ -39,6 +39,23 @@ type CoverageRow = {
   sku_transaction_count: number | string
 }
 
+type FinanceTransaction = {
+  sale_date: string
+  transaction_id: string
+  order_id: string | null
+  transaction_type: string
+  transaction_status: string
+  description: string | null
+  gross_sales: number | string
+  promotions: number | string
+  refunds: number | string
+  amazon_fees: number | string
+  shipping: number | string
+  reimbursements: number | string
+  net_proceeds: number | string
+  has_unmapped_component: boolean
+}
+
 type RowFilter = 'all' | 'activity' | 'no_activity' | 'negative'
 
 const PAGE_SIZE = 50
@@ -97,6 +114,9 @@ export default function ProfitabilityPage() {
   const [showCoverage, setShowCoverage] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [transactionsByKey, setTransactionsByKey] = useState<Record<string, FinanceTransaction[]>>({})
+  const [transactionLoadingKey, setTransactionLoadingKey] = useState<string | null>(null)
+  const [transactionErrors, setTransactionErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (!range.startDate || !range.endDate) return
@@ -169,15 +189,44 @@ export default function ProfitabilityPage() {
     { value: 'negative', label: 'Negative proceeds' },
   ]
 
-  return <div style={{ maxWidth: 1280 }}>
-    <style jsx>{`
-      .profitability-table th,
-      .profitability-table td {
-        padding: 10px 14px;
+  async function toggleRow(row: ProfitabilityRow, key: string) {
+    if (expandedKey === key) {
+      setExpandedKey(null)
+      return
+    }
+    setExpandedKey(key)
+    if (transactionsByKey[key] || transactionLoadingKey === key) return
+
+    setTransactionLoadingKey(key)
+    setTransactionErrors(current => ({ ...current, [key]: '' }))
+    const result = await supabase.rpc('get_native_sku_finance_transactions', {
+      p_start: range.startDate,
+      p_end: range.endDate,
+      p_marketplace: row.marketplace,
+      p_sku: row.sku,
+      p_limit: 100,
+    })
+    if (result.error) {
+      setTransactionErrors(current => ({ ...current, [key]: result.error.message }))
+    } else {
+      setTransactionsByKey(current => ({ ...current, [key]: (result.data || []) as FinanceTransaction[] }))
+    }
+    setTransactionLoadingKey(current => current === key ? null : current)
+  }
+
+  return <div id="profitability-page" style={{ maxWidth: 1280 }}>
+    <style jsx global>{`
+      #profitability-page .profitability-table th,
+      #profitability-page .profitability-table td {
+        padding: 11px 18px !important;
       }
-      .profitability-table thead th {
-        padding-top: 11px;
-        padding-bottom: 11px;
+      #profitability-page .profitability-table th:first-child,
+      #profitability-page .profitability-table td:first-child {
+        padding-left: 22px !important;
+      }
+      #profitability-page .profitability-table th:last-child,
+      #profitability-page .profitability-table td:last-child {
+        padding-right: 22px !important;
       }
     `}</style>
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, marginBottom: 18, flexWrap: 'wrap' }}>
@@ -260,7 +309,7 @@ export default function ProfitabilityPage() {
             const expanded = expandedKey === key
             const hasActivity = n(row.transaction_count) > 0
             return <React.Fragment key={key}>
-              <tr onClick={() => setExpandedKey(expanded ? null : key)} style={{ cursor: 'pointer', background: expanded ? 'var(--accent-light)' : undefined }}>
+              <tr onClick={() => void toggleRow(row, key)} style={{ cursor: 'pointer', background: expanded ? 'var(--accent-light)' : undefined }}>
                 <td><div style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` · ${row.asin}` : ''}</div></td>
                 <td style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>{row.marketplace}</td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : '—'}</td>
@@ -272,11 +321,44 @@ export default function ProfitabilityPage() {
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: n(row.net_proceeds_before_ads_ldp) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{hasActivity ? formatMoney(row.net_proceeds_before_ads_ldp) : 'No activity'}</td>
                 <td style={{ textAlign: 'center', color: 'var(--text-dim)' }}>{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</td>
               </tr>
-              {expanded && <tr><td colSpan={10} style={{ padding: 0 }}><div style={{ padding: '13px 16px', background: 'var(--bg-elevated)', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
-                <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Sales + promotions + refunds + Amazon fees + shipping + reimbursements = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong></div></div>
-                <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` · latest ${row.last_transaction_date}` : ''}</div></div>
-                <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Still missing</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--amber)', lineHeight: 1.6 }}>Product advertising and LDP. SellerIQ will not label this SKU profitable or unprofitable yet.</div></div>
-              </div></td></tr>}
+              {expanded && <tr><td colSpan={10} style={{ padding: 0 }}>
+                <div style={{ padding: '15px 18px', background: 'var(--bg-elevated)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 18 }}>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Sales + promotions + refunds + Amazon fees + shipping + reimbursements = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong></div></div>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` · latest ${row.last_transaction_date}` : ''}</div></div>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Validation</div><div style={{ marginTop: 5, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {!row.asin && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Missing ASIN</span>}
+                      {n(row.gross_sales) === 0 && hasActivity && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Activity without sales</span>}
+                      {Math.abs(n(row.amazon_fees)) > Math.abs(n(row.gross_sales)) && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--red-light)', color: 'var(--red)', fontSize: 9 }}>Fees exceed sales</span>}
+                      {row.asin && !(n(row.gross_sales) === 0 && hasActivity) && Math.abs(n(row.amazon_fees)) <= Math.abs(n(row.gross_sales)) && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--green-light)', color: 'var(--green)', fontSize: 9 }}>No structural flags</span>}
+                    </div></div>
+                  </div>
+
+                  <div style={{ marginTop: 15, paddingTop: 13, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                      <div><div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-primary)' }}>Transaction trace</div><div style={{ marginTop: 2, fontSize: 9, color: 'var(--text-muted)' }}>Latest 100 Amazon finance transactions in the selected period</div></div>
+                      {transactionLoadingKey === key && <LoaderCircle className="cadence-loading-spinner" size={16} style={{ color: 'var(--accent)' }} />}
+                    </div>
+                    {transactionErrors[key] ? <div style={{ padding: 10, color: 'var(--red)', fontSize: 10 }}>{transactionErrors[key]}</div>
+                    : transactionLoadingKey === key ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>Loading transaction evidence…</div>
+                    : (transactionsByKey[key] || []).length === 0 ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>No source transactions found for this SKU and period.</div>
+                    : <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
+                      <table className="profitability-table" style={{ width: '100%', minWidth: 860, borderCollapse: 'collapse' }}>
+                        <thead><tr><th style={{ textAlign: 'left' }}>Date</th><th style={{ textAlign: 'left' }}>Order</th><th style={{ textAlign: 'left' }}>Type / status</th><th style={{ textAlign: 'right' }}>Sales</th><th style={{ textAlign: 'right' }}>Refunds</th><th style={{ textAlign: 'right' }}>Fees</th><th style={{ textAlign: 'right' }}>Net proceeds</th></tr></thead>
+                        <tbody>{(transactionsByKey[key] || []).map(transaction => <tr key={transaction.transaction_id}>
+                          <td style={{ whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.sale_date}</td>
+                          <td><div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.order_id || 'No order ID'}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.description || transaction.transaction_id.slice(0, 16)}</div></td>
+                          <td><div style={{ fontSize: 9 }}>{transaction.transaction_type}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.transaction_status}{transaction.has_unmapped_component ? ' · unmapped component' : ''}</div></td>
+                          <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{formatMoney(transaction.gross_sales)}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(transaction.refunds) < 0 ? 'var(--red)' : undefined }}>{formatMoney(transaction.refunds)}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(transaction.amazon_fees) < 0 ? 'var(--red)' : undefined }}>{formatMoney(transaction.amazon_fees)}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>{formatMoney(transaction.net_proceeds)}</td>
+                        </tr>)}</tbody>
+                      </table>
+                    </div>}
+                  </div>
+                </div>
+              </td></tr>}
             </React.Fragment>
           })}</tbody>
         </table>
