@@ -18,6 +18,7 @@ import {
 const LOW_STOCK_THRESHOLD   = 30
 const CRITICAL_THRESHOLD    = 14
 const FBA_TARGET_DEFAULT      = 60
+const FBA_LEAD_DEFAULT        = 14
 const SUPPLIER_PROD_DEFAULT   = 42
 const SUPPLIER_SHIP_DEFAULT   = 28
 const SUPPLIER_BUFFER_DEFAULT = 60
@@ -55,6 +56,9 @@ type FbaReplenRow = {
   fulfillable: number
   inbound: number
   reserved: number
+  inventory_position: number
+  excluded_inventory: number
+  target_units: number
   avg_daily_units: number
   days_of_cover: number | null
   units_to_send: number
@@ -524,6 +528,124 @@ function ForecastPanel({
   )
 }
 
+
+// ─── FBA Decision Panel ───────────────────────────────────────
+function FbaDecisionPanel({
+  row,
+  targetDays,
+  leadDays,
+  salesHistory,
+}: {
+  row: FbaReplenRow
+  targetDays: number
+  leadDays: number
+  salesHistory: SalesHistoryPoint[]
+}) {
+  const [showDetails, setShowDetails] = useState(false)
+  const exactCover = row.avg_daily_units > 0 ? row.inventory_position / row.avg_daily_units : null
+  const stockoutDays = exactCover === null ? null : Math.max(0, Math.floor(exactCover))
+  const shipByDays = exactCover === null ? null : Math.floor(exactCover - leadDays)
+  const riskGapDays = exactCover === null ? 0 : Math.max(0, Math.ceil(leadDays - exactCover))
+  const latestHistory = salesHistory.slice(-30)
+  const maxUnits = Math.max(1, ...latestHistory.map(point => point.units))
+  const needsShipment = row.units_to_send > 0
+  const sendNow = needsShipment && (shipByDays === null || shipByDays <= 0)
+  const headline = !needsShipment
+    ? 'No FBA shipment needed'
+    : sendNow
+      ? `Send ${fmt(row.units_to_send)} units now`
+      : `Send ${fmt(row.units_to_send)} units by ${addDays(shipByDays)}`
+
+  return (
+    <div style={{ padding: '18px 20px 20px', background: 'var(--bg-card)', borderTop: '1px solid var(--border)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1.05fr) minmax(360px, 1.6fr)', gap: '18px', alignItems: 'stretch' }}>
+        <div style={{ padding: '18px', borderRadius: '10px', border: `1px solid ${sendNow ? 'rgba(239,68,68,0.28)' : 'var(--accent-border)'}`, background: sendNow ? 'rgba(239,68,68,0.06)' : 'var(--accent-light)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '7px', fontWeight: 600 }}>Recommended action</div>
+          <div style={{ fontSize: '22px', lineHeight: 1.2, fontWeight: 700, color: sendNow ? 'var(--red)' : needsShipment ? 'var(--accent)' : 'var(--green)', marginBottom: '9px' }}>{headline}</div>
+          <div style={{ fontSize: '12px', lineHeight: 1.55, color: 'var(--text-muted)' }}>
+            {row.avg_daily_units <= 0
+              ? 'No recent unit sales were found, so SellerIQ cannot calculate a replenishment quantity.'
+              : `At ${row.avg_daily_units.toFixed(1)} units/day, projected available inventory covers about ${row.days_of_cover} days.`}
+            {riskGapDays > 0 && ` A shipment sent today may arrive about ${riskGapDays} day${riskGapDays === 1 ? '' : 's'} after stock runs out.`}
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid var(--border)', borderRadius: '10px', padding: '16px 18px', background: 'var(--bg-elevated)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginBottom: '14px' }}>Timing</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center', gap: '10px' }}>
+            {[
+              { label: 'Today', value: addDays(0), color: 'var(--text-primary)' },
+              { label: 'Estimated stockout', value: stockoutDays === null ? 'No sales rate' : addDays(stockoutDays), color: riskGapDays > 0 ? 'var(--red)' : '#F97316' },
+              { label: 'Arrival if sent today', value: addDays(leadDays), color: riskGapDays > 0 ? 'var(--red)' : 'var(--green)' },
+            ].map((item, index) => (
+              <React.Fragment key={item.label}>
+                {index > 0 && <div style={{ height: '1px', width: '28px', background: 'var(--border)' }} />}
+                <div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '5px' }}>{item.label}</div>
+                  <div style={{ fontSize: '13px', fontWeight: 650, color: item.color }}>{item.value}</div>
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)', fontSize: '11px', color: 'var(--text-dim)' }}>
+            Arrival assumes a {leadDays}-day FBA transfer and receiving lead time.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: '16px', border: '1px solid var(--border)', borderRadius: '10px', overflow: 'hidden' }}>
+        <div style={{ padding: '11px 14px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)', fontSize: '11px', fontWeight: 650, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>How the recommendation is calculated</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr', fontSize: '12px' }}>
+          {[
+            ['Sellable now', fmt(row.available), 'Amazon available quantity'],
+            ['Already inbound', `+ ${fmt(row.inbound)}`, 'Working, shipped, and receiving'],
+            ['Projected available', fmt(row.inventory_position), 'Sellable now + inbound'],
+            ['Target stock', fmt(row.target_units), `${targetDays} days × ${row.avg_daily_units.toFixed(1)}/day`],
+            ['Recommended shipment', fmt(row.units_to_send), 'Target stock − projected available'],
+          ].map(([label, value, note], index) => (
+            <React.Fragment key={label}>
+              <div style={{ padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid var(--border)', color: 'var(--text-primary)', fontWeight: 550 }}>{label}</div>
+              <div style={{ padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid var(--border)', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 650, color: label === 'Recommended shipment' ? 'var(--accent)' : 'var(--text-primary)' }}>{value}</div>
+              <div style={{ padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid var(--border)', color: 'var(--text-dim)' }}>{note}</div>
+            </React.Fragment>
+          ))}
+        </div>
+        {row.excluded_inventory > 0 && (
+          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'rgba(245,158,11,0.06)', color: 'var(--text-muted)', fontSize: '11px', lineHeight: 1.5 }}>
+            {fmt(row.excluded_inventory)} units in reserved, unsellable, or researching status are included in Amazon's Total FBA number but excluded from replenishment coverage because they are not currently available to satisfy a new order.
+          </div>
+        )}
+      </div>
+
+      <button type="button" onClick={() => setShowDetails(value => !value)} style={{ marginTop: '12px', border: 'none', background: 'transparent', color: 'var(--accent)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', padding: '4px 0', display: 'flex', alignItems: 'center', gap: '5px' }}>
+        {showDetails ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        {showDetails ? 'Hide demand history and assumptions' : 'View demand history and assumptions'}
+      </button>
+
+      {showDetails && (
+        <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: 'minmax(360px, 1.5fr) minmax(260px, 1fr)', gap: '16px' }}>
+          <div style={{ border: '1px solid var(--border)', borderRadius: '10px', padding: '14px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 650, color: 'var(--text-muted)', marginBottom: '12px' }}>RECENT DAILY UNIT SALES</div>
+            {latestHistory.length > 0 ? (
+              <div style={{ height: '110px', display: 'flex', alignItems: 'flex-end', gap: '3px' }}>
+                {latestHistory.map(point => (
+                  <div key={point.dateKey} title={`${point.dateKey}: ${point.units} units`} style={{ flex: 1, minWidth: '3px', height: `${Math.max(3, (point.units / maxUnits) * 100)}%`, background: 'var(--accent)', opacity: 0.75, borderRadius: '3px 3px 0 0' }} />
+                ))}
+              </div>
+            ) : <div style={{ color: 'var(--text-dim)', fontSize: '12px' }}>No daily sales history available.</div>}
+          </div>
+          <div style={{ border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', fontSize: '11px', lineHeight: 1.65, color: 'var(--text-muted)' }}>
+            <div style={{ fontWeight: 650, color: 'var(--text-primary)', marginBottom: '6px' }}>Assumptions</div>
+            <div>Demand rate uses the most recent 30 calendar days ending on the latest available sales date.</div>
+            <div>Inbound inventory is assumed to become sellable.</div>
+            <div>No seasonality, growth trend, safety stock, or shipment-case rounding is applied yet.</div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Component ───────────────────────────────────────────
 export default function Inventory() {
   const [markets, setMarkets]         = useState(['US', 'CA'])
@@ -625,10 +747,12 @@ export default function Inventory() {
 
   // ── Replenishment settings ──
   const [fbaTarget, setFbaTarget]     = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_fba_target') || FBA_TARGET_DEFAULT) : FBA_TARGET_DEFAULT)
+  const [fbaLeadDays, setFbaLeadDays] = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_fba_lead') || FBA_LEAD_DEFAULT) : FBA_LEAD_DEFAULT)
   const [prodDays, setProdDays]       = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_prod_days') || SUPPLIER_PROD_DEFAULT) : SUPPLIER_PROD_DEFAULT)
   const [shipDays, setShipDays]       = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_ship_days') || SUPPLIER_SHIP_DEFAULT) : SUPPLIER_SHIP_DEFAULT)
   const [bufferDays, setBufferDays]   = useState<number>(() => typeof window !== 'undefined' ? Number(localStorage.getItem('selleriq_buffer_days') || SUPPLIER_BUFFER_DEFAULT) : SUPPLIER_BUFFER_DEFAULT)
   const [pendingFba, setPendingFba]   = useState<number>(fbaTarget)
+  const [pendingFbaLead, setPendingFbaLead] = useState<number>(fbaLeadDays)
   const [pendingProd, setPendingProd] = useState<number>(prodDays)
   const [pendingShip, setPendingShip] = useState<number>(shipDays)
   const [pendingBuffer, setPendingBuffer] = useState<number>(bufferDays)
@@ -753,7 +877,9 @@ export default function Inventory() {
 
   const applyFbaTarget = () => {
     setFbaTarget(pendingFba)
+    setFbaLeadDays(pendingFbaLead)
     localStorage.setItem('selleriq_fba_target', String(pendingFba))
+    localStorage.setItem('selleriq_fba_lead', String(pendingFbaLead))
     setShowFbaConfirm(false)
   }
 
@@ -823,13 +949,20 @@ export default function Inventory() {
       )
 
       const LOOKBACK_DAYS = 30
+      const velocityStartByMarket = Object.fromEntries(Object.entries(datesByMarket).map(([marketplace, endDate]) => {
+        const start = new Date(`${endDate}T00:00:00`)
+        start.setDate(start.getDate() - (LOOKBACK_DAYS - 1))
+        return [marketplace, dateKeyFromDate(start)]
+      }))
+      const isInVelocityWindow = (marketplace: string, date: string) =>
+        date >= velocityStartByMarket[marketplace] && date <= datesByMarket[marketplace]
       const salesBySku: Record<string, { total: number }> = {}
       const dailySalesBySku: Record<string, Record<string, number>> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
         const key = `${row.sku}__${row.marketplace}`
         if (!salesBySku[key]) salesBySku[key] = { total: 0 }
-        salesBySku[key].total += row.units_ordered || 0
+        if (isInVelocityWindow(row.marketplace, row.start_date)) salesBySku[key].total += row.units_ordered || 0
         if (!dailySalesBySku[key]) dailySalesBySku[key] = {}
         dailySalesBySku[key][row.start_date] = (dailySalesBySku[key][row.start_date] || 0) + (row.units_ordered || 0)
       }
@@ -839,7 +972,7 @@ export default function Inventory() {
       for (const row of salesData || []) {
         if (!row.sku) continue
         if (!salesBySkuOnly[row.sku]) salesBySkuOnly[row.sku] = { total: 0 }
-        salesBySkuOnly[row.sku].total += row.units_ordered || 0
+        if (isInVelocityWindow(row.marketplace, row.start_date)) salesBySkuOnly[row.sku].total += row.units_ordered || 0
         if (!dailySalesBySkuOnly[row.sku]) dailySalesBySkuOnly[row.sku] = {}
         dailySalesBySkuOnly[row.sku][row.start_date] = (dailySalesBySkuOnly[row.sku][row.start_date] || 0) + (row.units_ordered || 0)
       }
@@ -901,7 +1034,7 @@ export default function Inventory() {
         // sellability status. Includes researching + unsellable so the number
         // reconciles with the UI.
         const totalFba = fulfillable + inbound + reserved + unsellable + researching
-        const doc = avgDailyUnits > 0 ? Math.round(totalFba / avgDailyUnits) : null
+        const doc = avgDailyUnits > 0 ? Math.floor(available / avgDailyUnits) : null
 
         return {
           sku:           row.sku || '',
@@ -975,18 +1108,22 @@ export default function Inventory() {
   const fbaRows: FbaReplenRow[] = inventory
     .map(r => {
       const totalInv = r.total_fba
-      const fbaDoc = r.avg_daily_units > 0 ? Math.round(totalInv / r.avg_daily_units) : null
-      const unitsToSend = r.avg_daily_units > 0
-        ? Math.max(0, Math.round(fbaTarget * r.avg_daily_units) - totalInv)
-        : 0
+      const inventoryPosition = r.available + r.inbound
+      const excludedInventory = Math.max(0, totalInv - inventoryPosition)
+      const fbaDoc = r.avg_daily_units > 0 ? Math.floor(inventoryPosition / r.avg_daily_units) : null
+      const targetUnits = r.avg_daily_units > 0 ? Math.ceil(fbaTarget * r.avg_daily_units) : 0
+      const unitsToSend = Math.max(0, targetUnits - inventoryPosition)
       const urgency: FbaReplenRow['urgency'] =
         fbaDoc === null ? 'healthy' :
-        fbaDoc < supplierLeadDays ? 'critical' :
+        fbaDoc <= fbaLeadDays ? 'critical' :
         fbaDoc < fbaTarget ? 'reorder' : 'healthy'
       return {
         sku: r.sku, title: r.title, asin: r.asin, marketplace: r.marketplace,
         total_inventory: totalInv, available: r.available, fulfillable: r.fulfillable,
         inbound: r.inbound, reserved: r.reserved,
+        inventory_position: inventoryPosition,
+        excluded_inventory: excludedInventory,
+        target_units: targetUnits,
         avg_daily_units: r.avg_daily_units,
         days_of_cover: fbaDoc,
         units_to_send: unitsToSend,
@@ -1318,21 +1455,27 @@ export default function Inventory() {
                   <input type="number" value={pendingFba} onChange={e => setPendingFba(Number(e.target.value))} min={1} max={365}
                     style={{ width: '64px', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', outline: 'none', textAlign: 'center' }} />
                   <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>days</span>
-                  {pendingFba !== fbaTarget && (
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>FBA Transfer + Receiving:</span>
+                  <input type="number" value={pendingFbaLead} onChange={e => setPendingFbaLead(Number(e.target.value))} min={1} max={120}
+                    style={{ width: '64px', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', outline: 'none', textAlign: 'center' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>days</span>
+                  {(pendingFba !== fbaTarget || pendingFbaLead !== fbaLeadDays) && (
                     <button onClick={() => setShowFbaConfirm(true)} style={{ padding: '4px 12px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>Apply</button>
                   )}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginLeft: 'auto' }}>
                   Current target: <span style={{ color: 'var(--accent)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fbaTarget}d</span>
-                  {' · '}Lead time: <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{supplierLeadDays}d</span>
+                  {' · '}FBA lead time: <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{fbaLeadDays}d</span>
                 </div>
               </div>
 
               {showFbaConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ background: 'var(--bg-card)', borderRadius: '12px', padding: '24px', width: '360px', border: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px' }}>Update FBA Target?</div>
-                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px' }}>Set FBA target coverage to <strong>{pendingFba} days</strong> for all SKUs?</div>
+                    <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px' }}>Update FBA assumptions?</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px', lineHeight: 1.5 }}>Set target coverage to <strong>{pendingFba} days</strong> and FBA transfer + receiving lead time to <strong>{pendingFbaLead} days</strong> for all SKUs?</div>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                       <button onClick={() => setShowFbaConfirm(false)} style={{ padding: '7px 16px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
                       <button onClick={applyFbaTarget} style={{ padding: '7px 16px', borderRadius: '7px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Confirm</button>
@@ -1441,10 +1584,6 @@ export default function Inventory() {
                       {visibleFbaRows.map(row => {
                         const uc = URGENCY_CONFIG[row.urgency]
                         const isExpanded = expandedFbaSku === `${row.sku}-${row.marketplace}`
-                        const reorderThreshold = row.avg_daily_units * supplierLeadDays
-                        const daysUntilThreshold = row.days_of_cover !== null && row.days_of_cover > supplierLeadDays
-                          ? row.days_of_cover - supplierLeadDays : null
-
                         return (
                           <React.Fragment key={`${row.sku}-${row.marketplace}`}>
                             <tr
@@ -1479,25 +1618,11 @@ export default function Inventory() {
                             {isExpanded && (
                               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                 <td colSpan={9} style={{ padding: 0, background: 'var(--accent-light)' }}>
-                                  <ForecastPanel
-                                    startInventory={row.total_inventory}
-                                    avgDailyUnits={row.avg_daily_units}
-                                    horizonDays={fbaTarget}
-                                    thresholdUnits={reorderThreshold}
-                                    thresholdLabel={`Reorder point (${supplierLeadDays}d lead)`}
-                                    thresholdColor="#F97316"
-                                    orderByDays={daysUntilThreshold}
+                                  <FbaDecisionPanel
+                                    row={row}
+                                    targetDays={fbaTarget}
+                                    leadDays={fbaLeadDays}
                                     salesHistory={salesHistoryBySkuMarket[`${row.sku}__${row.marketplace}`] || []}
-                                    statsLeft={[
-                                      { label: 'Current FBA', value: fmt(row.total_inventory) },
-                                      { label: 'Avg/Day', value: row.avg_daily_units.toFixed(1) },
-                                      { label: 'Days Cover', value: row.days_of_cover !== null ? `${row.days_of_cover}d` : '—', color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' },
-                                    ]}
-                                    statsRight={[
-                                      { label: 'FBA Target', value: `${fbaTarget}d` },
-                                      { label: 'Units to Send', value: row.units_to_send > 0 ? fmt(row.units_to_send) : '✓ Covered', color: row.units_to_send > 0 ? 'var(--accent)' : 'var(--green)' },
-                                      { label: 'Send By', value: daysUntilThreshold !== null ? addDays(daysUntilThreshold) : row.urgency === 'critical' ? 'Now' : 'On Track', color: row.urgency === 'critical' ? 'var(--red)' : '#F97316' },
-                                    ]}
                                   />
                                 </td>
                               </tr>
