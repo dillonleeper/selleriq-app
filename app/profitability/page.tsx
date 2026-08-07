@@ -39,6 +39,12 @@ type CoverageRow = {
   sku_transaction_count: number | string
 }
 
+type FeeBreakdownRow = {
+  fee_type: string
+  amount_usd: number | string
+  transaction_count: number | string
+}
+
 type FinanceTransaction = {
   sale_date: string
   transaction_id: string
@@ -89,6 +95,17 @@ function coverageLabel(category: string) {
   return labels[category] || category.replaceAll('_', ' ')
 }
 
+function feeTypeLabel(value: string) {
+  if (value === 'Other / correction') return value
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/F B A/g, 'FBA')
+}
+
+function feeTreatment(value: string) {
+  if (value === 'SubscriptionFee') return 'Account overhead'
+  if (value === 'Other / correction') return 'Needs review'
+  return 'Additional Amazon detail required'
+}
+
 function SummaryCard({ label, value, note, tone = 'default' }: {
   label: string
   value: string
@@ -107,6 +124,7 @@ export default function ProfitabilityPage() {
   const [markets, setMarkets] = useState<string[]>(['US'])
   const [rows, setRows] = useState<ProfitabilityRow[]>([])
   const [coverage, setCoverage] = useState<CoverageRow[]>([])
+  const [feeBreakdown, setFeeBreakdown] = useState<FeeBreakdownRow[]>([])
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<RowFilter>('all')
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
@@ -131,19 +149,22 @@ export default function ProfitabilityPage() {
         p_end: range.endDate,
         p_markets: markets,
       }
-      const [skuResult, coverageResult] = await Promise.all([
+      const [skuResult, coverageResult, feeBreakdownResult] = await Promise.all([
         supabase.rpc('get_native_sku_profitability', params),
         supabase.rpc('get_native_profitability_coverage', params),
+        supabase.rpc('get_native_account_fee_breakdown', params),
       ])
 
       if (cancelled) return
-      if (skuResult.error || coverageResult.error) {
-        setError(skuResult.error?.message || coverageResult.error?.message || 'Could not load native finance data.')
+      if (skuResult.error || coverageResult.error || feeBreakdownResult.error) {
+        setError(skuResult.error?.message || coverageResult.error?.message || feeBreakdownResult.error?.message || 'Could not load native finance data.')
         setRows([])
         setCoverage([])
+        setFeeBreakdown([])
       } else {
         setRows((skuResult.data || []) as ProfitabilityRow[])
         setCoverage((coverageResult.data || []) as CoverageRow[])
+        setFeeBreakdown((feeBreakdownResult.data || []) as FeeBreakdownRow[])
       }
       setVisibleCount(PAGE_SIZE)
       setExpandedKey(null)
@@ -252,7 +273,7 @@ export default function ProfitabilityPage() {
       <SummaryCard label="Gross sales" value={formatMoney(accountGrossSales)} note="Amazon finance ledger" />
       <SummaryCard label="Net proceeds" value={formatMoney(accountNetProceeds)} note="Before product ads and LDP" />
       <SummaryCard label="Advertising" value={formatMoney(accountAds)} note="Account total; SKU allocation pending" tone="warning" />
-      <SummaryCard label="Unallocated fees" value={formatMoney(unallocatedFees)} note="Account-level Amazon fees" tone="warning" />
+      <SummaryCard label="Account-level fees" value={formatMoney(unallocatedFees)} note="Present, but not tied to a SKU" tone="warning" />
     </div>
 
     <button
@@ -281,6 +302,22 @@ export default function ProfitabilityPage() {
           })}</tbody>
         </table>
       </div>
+      {feeBreakdown.length > 0 && <div style={{ borderTop: '1px solid var(--border)', padding: '14px 22px 18px' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>Account-level Amazon fee breakdown</div>
+        <div style={{ marginTop: 3, marginBottom: 10, fontSize: 10, color: 'var(--text-muted)' }}>These fees are present in SellerIQ but Amazon did not attach them directly to a SKU.</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.6fr) minmax(110px, .7fr) minmax(90px, .6fr) minmax(190px, 1fr)', gap: 0, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ padding: '9px 12px', background: 'var(--bg-elevated)', fontSize: 9, fontWeight: 700 }}>Fee category</div>
+          <div style={{ padding: '9px 12px', background: 'var(--bg-elevated)', fontSize: 9, fontWeight: 700, textAlign: 'right' }}>Amount</div>
+          <div style={{ padding: '9px 12px', background: 'var(--bg-elevated)', fontSize: 9, fontWeight: 700, textAlign: 'right' }}>Transactions</div>
+          <div style={{ padding: '9px 12px', background: 'var(--bg-elevated)', fontSize: 9, fontWeight: 700 }}>Treatment</div>
+          {feeBreakdown.map(item => <React.Fragment key={item.fee_type}>
+            <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 10 }}>{feeTypeLabel(item.fee_type)}</div>
+            <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: n(item.amount_usd) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{formatMoney(item.amount_usd)}</div>
+            <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: 10 }}>{n(item.transaction_count).toLocaleString()}</div>
+            <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 9, color: item.fee_type === 'SubscriptionFee' ? 'var(--text-muted)' : 'var(--amber)' }}>{feeTreatment(item.fee_type)}</div>
+          </React.Fragment>)}
+        </div>
+      </div>}
     </div>}
 
     <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap' }}>
