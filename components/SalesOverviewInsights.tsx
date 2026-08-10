@@ -46,6 +46,7 @@ type Props = {
   skuDrivers: SkuDriver[]
   marketDrivers: MarketDriver[]
   inventoryRisks: InventoryRisk[]
+  inventoryError: boolean
   metrics: {
     revenue: number
     priorRevenue: number
@@ -114,7 +115,7 @@ function effectClause(factor: Factor) {
   return factor.effect >= 0 ? `added ${money(factor.effect)}` : `reduced revenue by ${money(Math.abs(factor.effect))}`
 }
 
-export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, inventoryRisks, metrics }: Props) {
+export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, inventoryRisks, inventoryError, metrics }: Props) {
   const positives = skuDrivers.filter(row => n(row.revenue_delta) > 0).sort((a, b) => n(b.revenue_delta) - n(a.revenue_delta)).slice(0, 5)
   const negatives = skuDrivers.filter(row => n(row.revenue_delta) < 0).sort((a, b) => n(a.revenue_delta) - n(b.revenue_delta)).slice(0, 5)
   const revenueDelta = metrics.revenue - metrics.priorRevenue
@@ -199,7 +200,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         </div>
       )}
 
-      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} />
+      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
     </div>
   )
 }
