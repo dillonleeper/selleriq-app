@@ -1,6 +1,9 @@
 'use client'
 
-import { BarChart2, Boxes, DollarSign, Eye, LockKeyhole, MousePointer, Percent, ShoppingCart } from 'lucide-react'
+import {
+  BarChart2, Boxes, DollarSign, Eye, LockKeyhole,
+  MousePointer, Percent, ShoppingCart
+} from 'lucide-react'
 
 type Props = {
   rangeLabel: string
@@ -33,96 +36,137 @@ const money = (value: number, decimals = 0) => '$' + value.toLocaleString('en-US
 const integer = (value: number) => Math.round(value).toLocaleString('en-US')
 const relativeDelta = (current: number, prior: number) => prior > 0 ? ((current - prior) / prior) * 100 : null
 
-type MetricCardProps = {
+type SummaryMetricProps = {
   label: string
-  value?: string
-  prior?: string
-  delta?: number | null
-  deltaSuffix?: string
+  value: string
+  detail: string
   icon: React.ReactNode
   color: string
-  locked?: boolean
-  lockedMessage?: string
-  supportingText?: string
+  hero?: boolean
+  delta?: number | null
 }
 
-function MetricCard({ label, value, prior, delta, deltaSuffix = '%', icon, color, locked = false, lockedMessage, supportingText }: MetricCardProps) {
+function SummaryMetric({ label, value, detail, icon, color, hero, delta }: SummaryMetricProps) {
   return (
-    <div className="card" style={{ padding: 17, minHeight: 112, borderStyle: locked ? 'dashed' : 'solid', opacity: locked ? 0.72 : 1 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-        <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>
-        <span style={{ color, opacity: 0.7 }}>{icon}</span>
+    <div className={`overview-summary-metric ${hero ? 'is-hero' : ''}`}>
+      <div className="overview-metric-heading">
+        <span>{label}</span>
+        <span style={{ color }}>{icon}</span>
       </div>
-      {locked ? (
-        <>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Awaiting verification</div>
-          <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>{lockedMessage || 'Required source data must be verified before this KPI is trusted.'}</div>
-        </>
-      ) : (
-        <>
-          <div style={{ fontSize: 21, fontWeight: 650, fontFamily: 'JetBrains Mono, monospace', marginBottom: 8 }}>{value}</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{supportingText || prior}</span>
-            {delta !== null && delta !== undefined && (
-              <span style={{ fontSize: 10, fontWeight: 600, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
-                {delta > 0 ? '+' : ''}{delta.toFixed(1)}{deltaSuffix}
-              </span>
-            )}
-          </div>
-        </>
-      )}
+      <div className="overview-metric-value">{value}</div>
+      <div className="overview-metric-detail">
+        <span>{detail}</span>
+        {delta !== null && delta !== undefined && (
+          <strong className={delta >= 0 ? 'is-positive' : 'is-negative'}>
+            {delta > 0 ? '+' : ''}{delta.toFixed(1)}%
+          </strong>
+        )}
+      </div>
+    </div>
+  )
+}
+
+type DiagnosticProps = {
+  label: string
+  value: string
+  detail: string
+  icon: React.ReactNode
+  color: string
+}
+
+function Diagnostic({ label, value, detail, icon, color }: DiagnosticProps) {
+  return (
+    <div className="overview-diagnostic">
+      <div className="overview-metric-heading">
+        <span>{label}</span><span style={{ color }}>{icon}</span>
+      </div>
+      <div className="overview-diagnostic-value">{value}</div>
+      <div className="overview-diagnostic-detail">{detail}</div>
     </div>
   )
 }
 
 export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, comparisonComplete, metrics }: Props) {
   const noComparison = `No complete ${comparisonLabel}`
-  const prior = (value: string) => comparisonComplete ? `${value} ${comparisonLabel}` : noComparison
+  const comparisonDetail = (priorValue: string) =>
+    comparisonComplete ? `${priorValue} ${comparisonLabel}` : noComparison
+
+  const lockedItems = [
+    { label: 'Contribution profit', reason: 'Connect Amazon Ads and landed product cost' },
+    { label: 'Contribution margin', reason: 'Connect Amazon Ads and landed product cost' },
+    { label: 'TACOS', reason: 'Connect and reconcile Amazon Ads' },
+  ]
 
   return (
-    <div style={{ marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 9 }}>
+    <section className="overview-kpis" aria-labelledby="business-outcomes-heading">
+      <div className="overview-section-heading">
         <div>
-          <div style={{ fontSize: 12, fontWeight: 650 }}>Business outcomes</div>
-          <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>Primary KPIs · {rangeLabel}</div>
+          <h2 id="business-outcomes-heading">Business outcomes</h2>
+          <p>Primary KPIs · {rangeLabel}</p>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>Unverified economics are locked—not treated as zero.</div>
+        <span>Verified economics only</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 10, marginBottom: 16 }}>
-        <MetricCard label="Ordered revenue" value={money(metrics.revenue)} prior={prior(money(metrics.priorRevenue))} delta={comparisonComplete ? relativeDelta(metrics.revenue, metrics.priorRevenue) : null} icon={<DollarSign size={14} />} color="var(--accent)" />
-        <MetricCard label="Contribution profit" locked lockedMessage="Advertising and landed product cost must be connected before this KPI is trusted." icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
-        <MetricCard label="Contribution margin" locked lockedMessage="Advertising and landed product cost must be connected before this KPI is trusted." icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
-        <MetricCard label="Units ordered" value={integer(metrics.units)} prior={prior(integer(metrics.priorUnits))} delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null} icon={<ShoppingCart size={14} />} color="var(--green)" />
-        <MetricCard label="TACOS" locked lockedMessage="Amazon Ads must be connected and reconciled before this KPI is trusted." icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
-        <MetricCard
+
+      <div className="overview-summary-panel">
+        <SummaryMetric
+          hero
+          label="Ordered revenue"
+          value={money(metrics.revenue)}
+          detail={comparisonDetail(money(metrics.priorRevenue))}
+          delta={comparisonComplete ? relativeDelta(metrics.revenue, metrics.priorRevenue) : null}
+          icon={<DollarSign size={16} />}
+          color="var(--accent)"
+        />
+        <SummaryMetric
+          label="Units ordered"
+          value={integer(metrics.units)}
+          detail={comparisonDetail(integer(metrics.priorUnits))}
+          delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null}
+          icon={<ShoppingCart size={16} />}
+          color="var(--green)"
+        />
+        <SummaryMetric
           label="Revenue refund rate"
           value={metrics.revenueRefundRate === null ? '—' : `${metrics.revenueRefundRate.toFixed(2)}%`}
-          locked={!metrics.financeKpisAvailable}
-          lockedMessage={metrics.financeKpiUnavailableReason}
-          supportingText="Refund dollars ÷ gross sales"
-          icon={<Percent size={14} />}
+          detail={metrics.financeKpisAvailable ? 'Refund dollars ÷ gross sales' : metrics.financeKpiUnavailableReason}
+          icon={<Percent size={16} />}
           color="var(--red)"
         />
-        <MetricCard
+        <SummaryMetric
           label="Amazon fee rate"
           value={metrics.amazonFeeRate === null ? '—' : `${metrics.amazonFeeRate.toFixed(2)}%`}
-          locked={!metrics.financeKpisAvailable}
-          lockedMessage={metrics.financeKpiUnavailableReason}
-          supportingText="Amazon fees ÷ gross sales"
-          icon={<Percent size={14} />}
+          detail={metrics.financeKpisAvailable ? 'Amazon fees ÷ gross sales' : metrics.financeKpiUnavailableReason}
+          icon={<Percent size={16} />}
           color="var(--yellow)"
         />
       </div>
 
-      <div style={{ fontSize: 12, fontWeight: 650, marginBottom: 9 }}>Demand diagnostics</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 10 }}>
-        <MetricCard label="Sessions" value={integer(metrics.sessions)} prior={prior(integer(metrics.priorSessions))} delta={comparisonComplete ? relativeDelta(metrics.sessions, metrics.priorSessions) : null} icon={<Eye size={14} />} color="var(--yellow)" />
-        <MetricCard label="Conversion rate" value={`${metrics.conversion.toFixed(2)}%`} prior={prior(`${metrics.priorConversion.toFixed(2)}%`)} delta={comparisonComplete ? metrics.conversion - metrics.priorConversion : null} deltaSuffix=" pp" icon={<Percent size={14} />} color="#EC4899" />
-        <MetricCard label="Average selling price" value={money(metrics.asp, 2)} prior={prior(money(metrics.priorAsp, 2))} delta={comparisonComplete ? relativeDelta(metrics.asp, metrics.priorAsp) : null} icon={<BarChart2 size={14} />} color="#6366F1" />
-        <MetricCard label="Page views" value={integer(metrics.pageViews)} prior={prior(integer(metrics.priorPageViews))} delta={comparisonComplete ? relativeDelta(metrics.pageViews, metrics.priorPageViews) : null} icon={<MousePointer size={14} />} color="#10B981" />
-        <MetricCard label="Buy Box" value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'} prior={prior(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')} delta={comparisonComplete && metrics.priorBuyBox > 0 ? metrics.buyBox - metrics.priorBuyBox : null} deltaSuffix=" pp" icon={<Boxes size={14} />} color="var(--accent)" />
+      <div className="overview-unlock-strip" aria-label="Metrics awaiting connected data">
+        <div className="overview-unlock-intro">
+          <LockKeyhole size={15} />
+          <div><strong>Unlock full economics</strong><span>Three KPIs need additional sources</span></div>
+        </div>
+        {lockedItems.map(item => (
+          <div key={item.label} className="overview-locked-kpi">
+            <strong>{item.label}</strong>
+            <span>{item.reason}</span>
+          </div>
+        ))}
       </div>
-      <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-dim)' }}>{integer(metrics.sellingSkus)} SKUs recorded at least one unit in this period.</div>
-    </div>
+
+      <div className="overview-section-heading demand-heading">
+        <div>
+          <h2>Demand health</h2>
+          <p>{integer(metrics.sellingSkus)} selling SKUs in this period</p>
+        </div>
+      </div>
+      <div className="overview-diagnostic-strip">
+        <Diagnostic label="Sessions" value={integer(metrics.sessions)} detail={comparisonDetail(integer(metrics.priorSessions))} icon={<Eye size={15} />} color="var(--yellow)" />
+        <Diagnostic label="Conversion" value={`${metrics.conversion.toFixed(2)}%`} detail={comparisonDetail(`${metrics.priorConversion.toFixed(2)}%`)} icon={<Percent size={15} />} color="#EC4899" />
+        <Diagnostic label="Avg. selling price" value={money(metrics.asp, 2)} detail={comparisonDetail(money(metrics.priorAsp, 2))} icon={<BarChart2 size={15} />} color="#6366F1" />
+        <Diagnostic label="Page views" value={integer(metrics.pageViews)} detail={comparisonDetail(integer(metrics.priorPageViews))} icon={<MousePointer size={15} />} color="#10B981" />
+        <Diagnostic label="Buy Box" value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'} detail={comparisonDetail(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')} icon={<Boxes size={15} />} color="var(--accent)" />
+      </div>
+    </section>
   )
 }
