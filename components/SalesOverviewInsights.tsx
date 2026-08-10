@@ -128,9 +128,27 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
     ? `Revenue ${revenueDelta >= 0 ? 'increased' : 'decreased'} ${money(Math.abs(revenueDelta))} (${percent(revenueChange)}) versus ${comparisonLabel}. The largest modeled effect came from ${rankedFactors[0].label.toLowerCase()}, which ${effectClause(rankedFactors[0])}. ${rankedFactors[1].label} ${effectClause(rankedFactors[1])}. ${strongestSku ? `${strongestSku.sku} was the largest SKU ${revenueDelta >= 0 ? 'gain' : 'decline'} at ${signedMoney(n(strongestSku.revenue_delta))}.` : 'No single SKU materially drove the change.'}`
     : `A complete ${comparisonLabel} is not available for this selection, so change attribution is intentionally withheld.`
 
+  const leadingMarket = [...marketDrivers].sort((a, b) => n(b.revenue) - n(a.revenue))[0]
+  const leadingMix = leadingMarket && marketCurrentRevenue > 0 ? (n(leadingMarket.revenue) / marketCurrentRevenue) * 100 : 0
+
   return (
-    <div style={{ display: 'grid', gap: 14, marginBottom: 20 }}>
-      <section className="card" aria-labelledby="change-heading" style={{ padding: 20, borderLeft: '3px solid var(--accent)' }}>
+    <div className="overview-story">
+      <section className="overview-briefing" aria-labelledby="briefing-heading">
+        <div className="overview-eyebrow">Executive briefing</div>
+        <h2 id="briefing-heading">{money(metrics.revenue)} in ordered revenue across {metrics.units.toLocaleString('en-US')} units.</h2>
+        <p>{comparisonAvailable
+          ? explanation
+          : `Current performance is shown without a forced comparison. ${leadingMarket ? `${leadingMarket.marketplace} represents ${leadingMix.toFixed(0)}% of marketplace revenue.` : 'Marketplace mix is still loading.'}`}</p>
+        <div className="overview-briefing-chips">
+          <span><strong>{metrics.conversion.toFixed(2)}%</strong> conversion</span>
+          <span><strong>{money(metrics.asp, 2)}</strong> average selling price</span>
+          <span><strong>{inventoryRisks.length}</strong> inventory risks detected</span>
+        </div>
+      </section>
+
+      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
+
+      <section className="card overview-change-card" aria-labelledby="change-heading">
         <div id="change-heading" style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>What changed?</div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>{explanation}</div>
 
@@ -152,10 +170,10 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         )}
       </section>
 
-      {comparisonAvailable && marketDrivers.length > 0 && (
-        <section className="card" aria-labelledby="market-heading" style={{ padding: 20 }}>
+      {marketDrivers.length > 0 && (
+        <section className="card overview-market-card" aria-labelledby="market-heading">
           <div id="market-heading" style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>Marketplace contribution</div>
-          <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>Current revenue mix and each marketplace&apos;s contribution to the selected comparison.</div>
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>{comparisonAvailable ? `Current revenue mix and change versus ${comparisonLabel}.` : 'Current revenue mix. Comparison change is unavailable for this range.'}</div>
           {marketDrivers.map((row, index) => {
             const current = n(row.revenue)
             const prior = n(row.prior_revenue)
@@ -166,7 +184,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
                 <strong>{row.marketplace}</strong>
                 <div style={{ height: 6, borderRadius: 999, background: 'var(--border)', overflow: 'hidden' }}><div style={{ width: `${Math.min(100, Math.max(0, mix))}%`, height: '100%', background: 'var(--accent)' }} /></div>
                 <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{mix.toFixed(1)}% · {money(current)}</span>
-                <span style={{ color: delta >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600, whiteSpace: 'nowrap' }}>{signedMoney(delta)}</span>
+                <span style={{ color: comparisonAvailable ? (delta >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text-dim)', fontWeight: 600, whiteSpace: 'nowrap' }}>{comparisonAvailable ? signedMoney(delta) : 'Current mix'}</span>
               </div>
             )
           })}
@@ -200,7 +218,6 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         </div>
       )}
 
-      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
     </div>
   )
 }
