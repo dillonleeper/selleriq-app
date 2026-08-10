@@ -499,6 +499,16 @@ export default function SalesOverview() {
     .sort((a, b) => a.display_order - b.display_order)
   const netProceeds = operatingRows.reduce((s, r) => s + Number(r.amount_usd || 0), 0)
   const totalDeferred = financeRows.reduce((s, r) => s + Number(r.deferred_count || 0), 0)
+  const financeAmount = (category: string) =>
+    Number(financeRows.find(row => row.pnl_category === category)?.amount_usd || 0)
+  const financeGrossSales = financeAmount('gross_sales')
+  const financeRefunds = Math.abs(financeAmount('refunds'))
+  const financeAmazonFees = Math.abs(financeAmount('amazon_fees'))
+  // These rates are account/market-level because get_finance_pnl does not
+  // accept a SKU filter. Suppress them rather than show mismatched scope.
+  const financeKpisAvailable = !financeError && hasFinance && !skuFilterActive && financeGrossSales > 0
+  const revenueRefundRate = financeKpisAvailable ? (financeRefunds / financeGrossSales) * 100 : null
+  const amazonFeeRate = financeKpisAvailable ? (financeAmazonFees / financeGrossSales) * 100 : null
 
   const salesBreakdown: BreakdownRow[] = hasFinance ? [
     ...operatingRows.map(r => ({ label: r.widget_line, value: Number(r.amount_usd || 0) })),
@@ -714,6 +724,12 @@ export default function SalesOverview() {
               buyBox: Number(overviewSummary.buy_box_pct) || 0,
               priorBuyBox: Number(overviewSummary.prior_buy_box_pct) || 0,
               sellingSkus: Number(overviewSummary.selling_skus) || 0,
+              revenueRefundRate,
+              amazonFeeRate,
+              financeKpisAvailable,
+              financeKpiUnavailableReason: skuFilterActive
+                ? 'Clear the SKU filter to view account-level finance rates.'
+                : 'Verified Amazon finance data is unavailable for this range.',
             }}
           />
 
