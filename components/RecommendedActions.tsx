@@ -9,6 +9,7 @@ type Props = {
   comparisonAvailable: boolean
   skuDrivers: SkuDriver[]
   inventoryRisks: InventoryRisk[]
+  inventoryError: boolean
 }
 
 type ActionKind = 'revenue' | 'traffic' | 'conversion' | 'buybox' | 'stock'
@@ -193,7 +194,7 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
   return [...strongestBySku.values()].sort((left, right) => right.score - left.score).slice(0, 10)
 }
 
-export default function RecommendedActions({ comparisonAvailable, skuDrivers, inventoryRisks }: Props) {
+export default function RecommendedActions({ comparisonAvailable, skuDrivers, inventoryRisks, inventoryError }: Props) {
   const actions = useMemo(() => buildActions(comparisonAvailable, skuDrivers, inventoryRisks), [comparisonAvailable, skuDrivers, inventoryRisks])
   const [preferences, setPreferences] = useState<Record<string, ActionPreference>>(EMPTY_PREFERENCES)
   const [preferencesLoaded, setPreferencesLoaded] = useState(false)
@@ -242,7 +243,11 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
       </div>
 
       {displayedActions.length === 0 ? (
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '12px 0' }}>{hiddenCount > 0 ? 'All current actions are dismissed or snoozed.' : 'No supported high-priority actions for this selection.'}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '12px 0' }}>{inventoryError
+          ? 'Inventory recommendations could not load. Refresh the page to try again.'
+          : hiddenCount > 0
+            ? 'All current actions are dismissed or snoozed.'
+            : 'No supported high-priority actions for this selection.'}</div>
       ) : displayedActions.map((action, index) => {
         const preference = preferences[action.id]
         const hidden = preferencesLoaded && isHidden(preference, now)
