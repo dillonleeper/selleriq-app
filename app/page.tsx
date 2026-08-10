@@ -232,6 +232,7 @@ export default function SalesOverview() {
   const [skuDrivers, setSkuDrivers] = useState<SkuDriver[]>([])
   const [marketDrivers, setMarketDrivers] = useState<MarketDriver[]>([])
   const [inventoryRisks, setInventoryRisks] = useState<InventoryRisk[]>([])
+  const [inventoryActionsError, setInventoryActionsError] = useState(false)
   const [overviewSummary, setOverviewSummary] = useState<OverviewSummary>({ buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
   // Finance P&L breakdown (null = not loaded yet; [] = loaded, no rows for range).
   const [finance, setFinance] = useState<FinanceRow[] | null>(null)
@@ -359,6 +360,7 @@ export default function SalesOverview() {
           setSkuDrivers([])
           setMarketDrivers([])
           setInventoryRisks([])
+          setInventoryActionsError(true)
           setOverviewSummary({ buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
         } else {
           const rows = (overviewResult.data || []) as OverviewRpcRow[]
@@ -397,8 +399,14 @@ export default function SalesOverview() {
 
           if (marketResult.error) console.error(marketResult.error)
           setMarketDrivers((marketResult.data || []) as MarketDriver[])
-          if (inventoryResult.error) console.error(inventoryResult.error)
-          setInventoryRisks((inventoryResult.data || []) as InventoryRisk[])
+          if (inventoryResult.error) {
+            console.error(inventoryResult.error)
+            setInventoryActionsError(true)
+            setInventoryRisks([])
+          } else {
+            setInventoryActionsError(false)
+            setInventoryRisks((inventoryResult.data || []) as InventoryRisk[])
+          }
         }
 
         if (financeResult.error) {
@@ -422,6 +430,7 @@ export default function SalesOverview() {
           setSkuDrivers([])
           setMarketDrivers([])
           setInventoryRisks([])
+          setInventoryActionsError(true)
           setOverviewSummary({ buy_box_pct: null, prior_buy_box_pct: null, selling_skus: 0 })
           setFinanceError(true)
           setFinance([])
@@ -713,7 +722,7 @@ export default function SalesOverview() {
             comparisonLabel={comparisonLabel}
             skuDrivers={skuDrivers}
             marketDrivers={marketDrivers}
-            inventoryRisks={inventoryRisks}
+            inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,
               units: totalUnits, priorUnits: prevUnits,
