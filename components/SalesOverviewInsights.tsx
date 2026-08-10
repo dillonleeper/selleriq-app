@@ -40,7 +40,7 @@ export type InventoryRisk = {
   estimated_monthly_revenue: number | string
 }
 
-type Props = {
+export type SalesOverviewInsightsProps = {
   comparisonAvailable: boolean
   comparisonLabel: string
   skuDrivers: SkuDriver[]
@@ -77,7 +77,7 @@ const percent = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}%
 const relativeChange = (current: number, prior: number) => prior > 0 ? ((current - prior) / prior) * 100 : null
 const factorRevenue = (values: Record<FactorKey, number>) => values.traffic * values.conversion * values.asp
 
-function decomposeRevenue(metrics: Props['metrics']): Factor[] {
+function decomposeRevenue(metrics: SalesOverviewInsightsProps['metrics']): Factor[] {
   const prior: Record<FactorKey, number> = {
     traffic: metrics.priorSessions,
     conversion: metrics.priorConversion / 100,
@@ -115,37 +115,10 @@ function effectClause(factor: Factor) {
   return factor.effect >= 0 ? `added ${money(factor.effect)}` : `reduced revenue by ${money(Math.abs(factor.effect))}`
 }
 
-export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, inventoryRisks, inventoryError, metrics }: Props) {
-  const positives = skuDrivers.filter(row => n(row.revenue_delta) > 0).sort((a, b) => n(b.revenue_delta) - n(a.revenue_delta)).slice(0, 5)
-  const negatives = skuDrivers.filter(row => n(row.revenue_delta) < 0).sort((a, b) => n(a.revenue_delta) - n(b.revenue_delta)).slice(0, 5)
-  const revenueDelta = metrics.revenue - metrics.priorRevenue
-  const revenueChange = relativeChange(metrics.revenue, metrics.priorRevenue)
-  const marketCurrentRevenue = marketDrivers.reduce((sum, row) => sum + n(row.revenue), 0)
-  const factors = decomposeRevenue(metrics)
-  const rankedFactors = [...factors].sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
-  const strongestSku = revenueDelta < 0 ? negatives[0] : positives[0]
-  const explanation = comparisonAvailable && revenueChange !== null
-    ? `Revenue ${revenueDelta >= 0 ? 'increased' : 'decreased'} ${money(Math.abs(revenueDelta))} (${percent(revenueChange)}) versus ${comparisonLabel}. The largest modeled effect came from ${rankedFactors[0].label.toLowerCase()}, which ${effectClause(rankedFactors[0])}. ${rankedFactors[1].label} ${effectClause(rankedFactors[1])}. ${strongestSku ? `${strongestSku.sku} was the largest SKU ${revenueDelta >= 0 ? 'gain' : 'decline'} at ${signedMoney(n(strongestSku.revenue_delta))}.` : 'No single SKU materially drove the change.'}`
-    : `A complete ${comparisonLabel} is not available for this selection, so change attribution is intentionally withheld.`
-
-  const leadingMarket = [...marketDrivers].sort((a, b) => n(b.revenue) - n(a.revenue))[0]
-  const leadingMix = leadingMarket && marketCurrentRevenue > 0 ? (n(leadingMarket.revenue) / marketCurrentRevenue) * 100 : 0
-
+export function ExecutiveBriefing({ comparisonAvailable, comparisonLabel, marketDrivers, inventoryRisks, metrics }: SalesOverviewInsightsProps) {
+  const marketRevenue = marketDrivers.reduce((sum, row) => sum + n(row.revenue), 0)
   return (
     <div className="overview-story">
-      <section className="overview-briefing" aria-labelledby="briefing-heading">
-        <div className="overview-eyebrow">Executive briefing</div>
-        <h2 id="briefing-heading">{money(metrics.revenue)} in ordered revenue across {metrics.units.toLocaleString('en-US')} units.</h2>
-        <p>{comparisonAvailable
-          ? explanation
-          : `Current performance is shown without a forced comparison. ${leadingMarket ? `${leadingMarket.marketplace} represents ${leadingMix.toFixed(0)}% of marketplace revenue.` : 'Marketplace mix is still loading.'}`}</p>
-        <div className="overview-briefing-chips">
-          <span><strong>{metrics.conversion.toFixed(2)}%</strong> conversion</span>
-          <span><strong>{money(metrics.asp, 2)}</strong> average selling price</span>
-          <span><strong>{inventoryRisks.length}</strong> inventory risks detected</span>
-        </div>
-      </section>
-
       <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
 
       <section className="card overview-change-card" aria-labelledby="change-heading">
