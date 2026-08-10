@@ -522,9 +522,9 @@ export default function SalesOverview() {
   const truncate = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + '…' : s
 
   return (
-    <div>
+    <div className="sales-overview-page">
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+      <div className="overview-page-header">
         <div>
           <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Sales Overview</h1>
           <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
@@ -547,7 +547,7 @@ export default function SalesOverview() {
             )}
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+        <div className="overview-filter-bar">
           <DateRangeFilter onChange={setDateRange} defaultPreset="ytd" />
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             Compare
@@ -561,11 +561,11 @@ export default function SalesOverview() {
       </div>
 
       {/* Search Bar */}
-      <div ref={searchRef} style={{ position: 'relative', marginBottom: '20px' }}>
+      <div ref={searchRef} className="overview-search">
         <div style={{
           display: 'flex', alignItems: 'center', gap: '10px',
           background: 'var(--bg-card)', border: '1px solid var(--border)',
-          borderRadius: '10px', padding: '10px 14px', boxShadow: 'var(--shadow-sm)',
+          borderRadius: '14px', padding: '12px 16px', boxShadow: 'var(--shadow-sm)',
         }}>
           <Search size={14} color="var(--text-muted)" />
           <input
