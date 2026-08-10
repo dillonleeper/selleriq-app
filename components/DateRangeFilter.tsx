@@ -14,6 +14,7 @@ export { PRESET_LABELS, computeRange } from './dateRange'
 type Props = {
   onChange: (range: DateRange) => void
   defaultPreset?: DatePreset
+  anchorDate?: string | null
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -38,17 +39,18 @@ const itemStyle = (active: boolean): React.CSSProperties => ({
 // ─────────────────────────────────────────────────────────────
 // Component — Shopify-style grouped popover
 // ─────────────────────────────────────────────────────────────
-export default function DateRangeFilter({ onChange, defaultPreset = 'mtd' }: Props) {
+export default function DateRangeFilter({ onChange, defaultPreset = 'mtd', anchorDate = null }: Props) {
   const [preset, setPreset] = useState<DatePreset>(defaultPreset)
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
 
-  const range = useMemo(
-    () => computeRange(preset, customStart, customEnd),
-    [preset, customStart, customEnd]
-  )
+  const range = useMemo(() => {
+    const anchor = anchorDate ? new Date(anchorDate + 'T12:00:00') : new Date()
+    if (anchorDate) anchor.setDate(anchor.getDate() + 1)
+    return computeRange(preset, customStart, customEnd, anchor)
+  }, [preset, customStart, customEnd, anchorDate])
 
   // Emit upward whenever the computed window changes. Depends on the
   // primitive fields (not object identity) to avoid spurious fires.
