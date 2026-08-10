@@ -52,3 +52,68 @@ as $function$
 $function$;
 
 grant execute on function public.get_sales_overview(date,date,date,date,text[],text[]) to anon, authenticated;
+
+
+create or replace function public.get_sales_overview_market_drivers(
+  p_start date, p_end date, p_prior_start date, p_prior_end date,
+  p_markets text[], p_skus text[] default null
+)
+returns table (marketplace text, revenue numeric, prior_revenue numeric, units numeric, sessions numeric)
+language sql stable security invoker set search_path = ''
+as $function$
+  with complete_dates as materialized (
+    select f.start_date from public.fct_sales_daily f
+    where f.marketplace=any(p_markets)
+      and (f.start_date between p_start and p_end or f.start_date between p_prior_start and p_prior_end)
+    group by f.start_date having count(distinct f.marketplace)=cardinality(p_markets)
+  ), fx as materialized (
+    select d.marketplace,d.start_date,
+      case when d.marketplace='CA' then coalesce(public.reporting_fx_rate('CAD',d.start_date),1) else 1 end rate
+    from (
+      select distinct f.marketplace,f.start_date from public.fct_sales_daily f
+      join complete_dates c using(start_date)
+      where f.marketplace=any(p_markets)
+    ) d
+  )
+  select f.marketplace,
+    sum(coalesce(f.ordered_product_sales_amount,0)*fx.rate) filter(where f.start_date between p_start and p_end)::numeric,
+    sum(coalesce(f.ordered_product_sales_amount,0)*fx.rate) filter(where f.start_date between p_prior_start and p_prior_end)::numeric,
+    sum(coalesce(f.units_ordered,0)) filter(where f.start_date between p_start and p_end)::numeric,
+    sum(coalesce(f.sessions,0)) filter(where f.start_date between p_start and p_end)::numeric
+  from public.fct_sales_daily f
+  join complete_dates c using(start_date)
+  join fx using(marketplace,start_date)
+  where f.marketplace=any(p_markets) and (p_skus is null or f.sku=any(p_skus))
+    and (f.start_date between p_start and p_end or f.start_date between p_prior_start and p_prior_end)
+  group by f.marketplace order by 2 desc nulls last;
+$function$;
+
+create or replace function public.get_sales_overview_summary(
+  p_start date, p_end date, p_prior_start date, p_prior_end date,
+  p_markets text[], p_skus text[] default null
+)
+returns table (buy_box_pct numeric, prior_buy_box_pct numeric, selling_skus integer)
+language sql stable security invoker set search_path = ''
+as $function$
+  with complete_dates as materialized (
+    select f.start_date from public.fct_sales_daily f
+    where f.marketplace=any(p_markets)
+      and (f.start_date between p_start and p_end or f.start_date between p_prior_start and p_prior_end)
+    group by f.start_date having count(distinct f.marketplace)=cardinality(p_markets)
+  )
+  select
+    case when sum(coalesce(f.sessions,0)) filter(where f.start_date between p_start and p_end)>0
+      then sum(coalesce(f.buy_box_percentage,0)*coalesce(f.sessions,0)) filter(where f.start_date between p_start and p_end)
+        / sum(coalesce(f.sessions,0)) filter(where f.start_date between p_start and p_end) end::numeric,
+    case when sum(coalesce(f.sessions,0)) filter(where f.start_date between p_prior_start and p_prior_end)>0
+      then sum(coalesce(f.buy_box_percentage,0)*coalesce(f.sessions,0)) filter(where f.start_date between p_prior_start and p_prior_end)
+        / sum(coalesce(f.sessions,0)) filter(where f.start_date between p_prior_start and p_prior_end) end::numeric,
+    count(distinct f.sku) filter(where f.start_date between p_start and p_end and coalesce(f.units_ordered,0)>0)::integer
+  from public.fct_sales_daily f join complete_dates c using(start_date)
+  where f.marketplace=any(p_markets)
+    and (p_skus is null or f.sku=any(p_skus))
+    and (f.start_date between p_start and p_end or f.start_date between p_prior_start and p_prior_end);
+$function$;
+
+grant execute on function public.get_sales_overview_market_drivers(date,date,date,date,text[],text[]) to anon, authenticated;
+grant execute on function public.get_sales_overview_summary(date,date,date,date,text[],text[]) to anon, authenticated;
