@@ -22,6 +22,10 @@ type Props = {
     buyBox: number
     priorBuyBox: number
     sellingSkus: number
+    revenueRefundRate: number | null
+    amazonFeeRate: number | null
+    financeKpisAvailable: boolean
+    financeKpiUnavailableReason: string
   }
 }
 
@@ -38,9 +42,11 @@ type MetricCardProps = {
   icon: React.ReactNode
   color: string
   locked?: boolean
+  lockedMessage?: string
+  supportingText?: string
 }
 
-function MetricCard({ label, value, prior, delta, deltaSuffix = '%', icon, color, locked = false }: MetricCardProps) {
+function MetricCard({ label, value, prior, delta, deltaSuffix = '%', icon, color, locked = false, lockedMessage, supportingText }: MetricCardProps) {
   return (
     <div className="card" style={{ padding: 17, minHeight: 112, borderStyle: locked ? 'dashed' : 'solid', opacity: locked ? 0.72 : 1 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
@@ -50,13 +56,13 @@ function MetricCard({ label, value, prior, delta, deltaSuffix = '%', icon, color
       {locked ? (
         <>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Awaiting verification</div>
-          <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>Sellerboard import must reconcile before this KPI is trusted.</div>
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>{lockedMessage || 'Required source data must be verified before this KPI is trusted.'}</div>
         </>
       ) : (
         <>
           <div style={{ fontSize: 21, fontWeight: 650, fontFamily: 'JetBrains Mono, monospace', marginBottom: 8 }}>{value}</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{prior}</span>
+            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{supportingText || prior}</span>
             {delta !== null && delta !== undefined && (
               <span style={{ fontSize: 10, fontWeight: 600, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
                 {delta > 0 ? '+' : ''}{delta.toFixed(1)}{deltaSuffix}
@@ -84,11 +90,28 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 10, marginBottom: 16 }}>
         <MetricCard label="Ordered revenue" value={money(metrics.revenue)} prior={prior(money(metrics.priorRevenue))} delta={comparisonComplete ? relativeDelta(metrics.revenue, metrics.priorRevenue) : null} icon={<DollarSign size={14} />} color="var(--accent)" />
-        <MetricCard label="Contribution profit" locked icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
-        <MetricCard label="Contribution margin" locked icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
+        <MetricCard label="Contribution profit" locked lockedMessage="Advertising and landed product cost must be connected before this KPI is trusted." icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
+        <MetricCard label="Contribution margin" locked lockedMessage="Advertising and landed product cost must be connected before this KPI is trusted." icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
         <MetricCard label="Units ordered" value={integer(metrics.units)} prior={prior(integer(metrics.priorUnits))} delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null} icon={<ShoppingCart size={14} />} color="var(--green)" />
-        <MetricCard label="TACOS" locked icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
-        <MetricCard label="Refund rate" locked icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
+        <MetricCard label="TACOS" locked lockedMessage="Amazon Ads must be connected and reconciled before this KPI is trusted." icon={<LockKeyhole size={13} />} color="var(--text-dim)" />
+        <MetricCard
+          label="Revenue refund rate"
+          value={metrics.revenueRefundRate === null ? '—' : `${metrics.revenueRefundRate.toFixed(2)}%`}
+          locked={!metrics.financeKpisAvailable}
+          lockedMessage={metrics.financeKpiUnavailableReason}
+          supportingText="Refund dollars ÷ gross sales"
+          icon={<Percent size={14} />}
+          color="var(--red)"
+        />
+        <MetricCard
+          label="Amazon fee rate"
+          value={metrics.amazonFeeRate === null ? '—' : `${metrics.amazonFeeRate.toFixed(2)}%`}
+          locked={!metrics.financeKpisAvailable}
+          lockedMessage={metrics.financeKpiUnavailableReason}
+          supportingText="Amazon fees ÷ gross sales"
+          icon={<Percent size={14} />}
+          color="var(--yellow)"
+        />
       </div>
 
       <div style={{ fontSize: 12, fontWeight: 650, marginBottom: 9 }}>Demand diagnostics</div>
