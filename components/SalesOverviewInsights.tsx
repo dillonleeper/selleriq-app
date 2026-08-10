@@ -31,6 +31,8 @@ export type InventoryRisk = {
   snapshot_date: string
   available_quantity: number | string
   inbound_quantity: number | string
+  fc_transfer_quantity: number | string
+  fc_processing_quantity: number | string
   recent_units: number | string
   units_per_day: number | string
   available_days_of_cover: number | string
