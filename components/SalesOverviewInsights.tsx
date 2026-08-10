@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
 import RecommendedActions from '@/components/RecommendedActions'
 
@@ -116,6 +117,7 @@ function effectClause(factor: Factor) {
 }
 
 export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, inventoryRisks, inventoryError, metrics }: Props) {
+  const [driverView, setDriverView] = useState<'gains' | 'declines'>('gains')
   const positives = skuDrivers.filter(row => n(row.revenue_delta) > 0).sort((a, b) => n(b.revenue_delta) - n(a.revenue_delta)).slice(0, 5)
   const negatives = skuDrivers.filter(row => n(row.revenue_delta) < 0).sort((a, b) => n(a.revenue_delta) - n(b.revenue_delta)).slice(0, 5)
   const revenueDelta = metrics.revenue - metrics.priorRevenue
@@ -131,28 +133,6 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
   return (
     <div className="overview-story">
       <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
-
-      <section className="card overview-change-card" aria-labelledby="change-heading">
-        <div id="change-heading" style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>What changed?</div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>{explanation}</div>
-
-        {comparisonAvailable && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginTop: 16 }}>
-              {factors.map(factor => (
-                <div key={factor.key} style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-elevated)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-                    <span>{factor.label}</span><span>{factor.current}</span>
-                  </div>
-                  <div style={{ marginTop: 5, fontSize: 15, fontWeight: 700, color: factor.effect >= 0 ? 'var(--green)' : 'var(--red)' }}>{signedMoney(factor.effect)}</div>
-                  <div style={{ marginTop: 2, fontSize: 10, color: 'var(--text-dim)' }}>{factor.change} · modeled revenue effect</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-dim)' }}>Effects use a symmetric revenue decomposition of sessions × conversion × average selling price. They reconcile to the revenue change but indicate contribution, not proven causation.</div>
-          </>
-        )}
-      </section>
 
       {marketDrivers.length > 0 && (
         <section className="card overview-market-card" aria-labelledby="market-heading">
@@ -175,32 +155,37 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         </section>
       )}
 
-      {comparisonAvailable && (positives.length > 0 || negatives.length > 0) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-          {[
-            { title: 'Top revenue gains', rows: positives, color: 'var(--green)', Icon: ArrowUpRight },
-            { title: 'Top revenue declines', rows: negatives, color: 'var(--red)', Icon: ArrowDownRight },
-          ].map(group => (
-            <section key={group.title} className="card" aria-label={group.title} style={{ padding: 20 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{group.title}</div>
-              {group.rows.length === 0 ? (
-                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>No material SKU drivers.</div>
-              ) : group.rows.map(row => (
-                <div key={row.sku} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
-                    <div title={row.title} style={{ fontSize: 10, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.title}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{money(n(row.revenue))} current revenue</div>
-                  </div>
-                  <div style={{ color: group.color, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 3 }}>
-                    <group.Icon size={12} /> {signedMoney(n(row.revenue_delta))}
-                  </div>
+      {comparisonAvailable && (positives.length > 0 || negatives.length > 0) && (() => {
+        const rows = driverView === 'gains' ? positives : negatives
+        const color = driverView === 'gains' ? 'var(--green)' : 'var(--red)'
+        const Icon = driverView === 'gains' ? ArrowUpRight : ArrowDownRight
+        return (
+          <section className="card overview-driver-panel" aria-labelledby="product-drivers-heading">
+            <div className="overview-driver-header">
+              <div>
+                <div id="product-drivers-heading" style={{ fontSize: 13, fontWeight: 600 }}>Product drivers</div>
+                <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 3 }}>Products contributing most to the selected comparison.</div>
+              </div>
+              <div className="overview-driver-tabs" role="group" aria-label="Product driver direction">
+                <button type="button" className={driverView === 'gains' ? 'is-active' : ''} onClick={() => setDriverView('gains')}>Gaining</button>
+                <button type="button" className={driverView === 'declines' ? 'is-active' : ''} onClick={() => setDriverView('declines')}>Declining</button>
+              </div>
+            </div>
+            {rows.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', paddingTop: 12 }}>No material SKU drivers.</div>
+            ) : rows.map(row => (
+              <div key={row.sku} className="overview-driver-row">
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
+                  <div title={row.title} style={{ fontSize: 10, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.title}</div>
                 </div>
-              ))}
-            </section>
-          ))}
-        </div>
-      )}
+                <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{money(n(row.revenue))} revenue</span>
+                <strong style={{ color, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 3 }}><Icon size={12} /> {signedMoney(n(row.revenue_delta))}</strong>
+              </div>
+            ))}
+          </section>
+        )
+      })()}
 
     </div>
   )
