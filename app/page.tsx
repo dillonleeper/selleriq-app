@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
-import SalesOverviewInsights, { InventoryRisk, MarketDriver, SkuDriver } from '@/components/SalesOverviewInsights'
+import SalesOverviewInsights, { ExecutiveBriefing, InventoryRisk, MarketDriver, SkuDriver } from '@/components/SalesOverviewInsights'
 import SalesKpiHierarchy from '@/components/SalesKpiHierarchy'
 import {
   Area, XAxis, YAxis, CartesianGrid,
@@ -710,6 +710,22 @@ export default function SalesOverview() {
         </div>
       ) : (
         <>
+          <ExecutiveBriefing
+            comparisonAvailable={comparisonComplete && prevData.length > 0}
+            comparisonLabel={comparisonLabel}
+            skuDrivers={skuDrivers}
+            marketDrivers={marketDrivers}
+            inventoryRisks={inventoryRisks}
+            inventoryError={inventoryActionsError}
+            metrics={{
+              revenue: totalRevenue, priorRevenue: prevRevenue,
+              units: totalUnits, priorUnits: prevUnits,
+              sessions: totalSessions, priorSessions: prevSessions,
+              conversion: convRate, priorConversion: prevConvRate,
+              asp, priorAsp: prevAsp,
+            }}
+          />
+
           <SalesKpiHierarchy
             rangeLabel={rangeLabel}
             comparisonLabel={comparisonLabel}
