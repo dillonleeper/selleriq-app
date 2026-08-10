@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
+import TrafficProductDiagnostic, { type TrafficDiagnosticPoint } from '@/components/TrafficProductDiagnostic'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line,
@@ -43,13 +44,7 @@ type ProductRow = {
   health: HealthStatus
 }
 
-type WeeklyPoint = {
-  start_date: string
-  raw_date: string
-  sessions: number
-  conv_rate: number
-  buy_box_pct: number
-}
+type WeeklyPoint = TrafficDiagnosticPoint
 
 type SortKey = 'sessions' | 'page_views' | 'views_per_session' | 'conv_rate' | 'buy_box_pct' | 'units' | 'conv_change'
 type SortDir = 'asc' | 'desc'
@@ -145,6 +140,7 @@ export default function TrafficConversion() {
   const [allWeeklyData, setAllWeeklyData] = useState<Record<string, WeeklyPoint[]>>({})
   const [loading, setLoading] = useState(true)
   const [expandedSku, setExpandedSku] = useState<string | null>(null)
+  const [diagnosticLoadingSku, setDiagnosticLoadingSku] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('sessions')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [healthFilter, setHealthFilter] = useState<'all' | 'needs_attention' | 'healthy'>('all')
@@ -276,22 +272,41 @@ export default function TrafficConversion() {
   useEffect(() => {
     if (!expandedSku || !dateRange) return
     let cancelled = false
-    supabase.rpc('get_sku_sales_series', {
+    setDiagnosticLoadingSku(expandedSku)
+    supabase.rpc('get_sku_traffic_inventory_diagnostic', {
       p_start: dateRange.startDate,
       p_end: dateRange.endDate,
       p_markets: markets,
       p_sku: expandedSku,
     }).then(({ data, error }) => {
       if (cancelled) return
-      if (error) { console.error(error); return }
+      if (error) {
+        console.error(error)
+        setDiagnosticLoadingSku(current => current === expandedSku ? null : current)
+        return
+      }
       const points: WeeklyPoint[] = ((data || []) as any[]).map(point => ({
         raw_date: point.d,
         start_date: new Date(point.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        sessions: Number(point.sessions) || 0,
-        conv_rate: Number(point.conv_rate) || 0,
-        buy_box_pct: point.buy_box_pct != null ? Number(point.buy_box_pct) : 0,
+        sessions: point.sessions == null ? null : Number(point.sessions),
+        page_views: point.page_views == null ? null : Number(point.page_views),
+        units: point.units == null ? null : Number(point.units),
+        conv_rate: point.conv_rate == null ? null : Number(point.conv_rate),
+        buy_box_pct: point.buy_box_pct == null ? null : Number(point.buy_box_pct),
+        sales_market_count: Number(point.sales_market_count) || 0,
+        selected_market_count: Number(point.selected_market_count) || markets.length,
+        inventory_snapshot_date: point.inventory_snapshot_date || null,
+        inventory_age_days: point.inventory_age_days == null ? null : Number(point.inventory_age_days),
+        inventory_market_count: Number(point.inventory_market_count) || 0,
+        available_quantity: point.available_quantity == null ? null : Number(point.available_quantity),
+        fulfillable_quantity: point.fulfillable_quantity == null ? null : Number(point.fulfillable_quantity),
+        reserved_customerorders: point.reserved_customerorders == null ? null : Number(point.reserved_customerorders),
+        reserved_fc_transfers: point.reserved_fc_transfers == null ? null : Number(point.reserved_fc_transfers),
+        reserved_fc_processing: point.reserved_fc_processing == null ? null : Number(point.reserved_fc_processing),
+        inbound_quantity: point.inbound_quantity == null ? null : Number(point.inbound_quantity),
       }))
       setAllWeeklyData(previous => ({ ...previous, [expandedSku]: points }))
+      setDiagnosticLoadingSku(current => current === expandedSku ? null : current)
     })
     return () => { cancelled = true }
   }, [expandedSku, dateRange, markets])
@@ -675,66 +690,13 @@ export default function TrafficConversion() {
                           </td>
                         </tr>
                         {isExpanded && (
-                          <tr key={p.sku + '-exp'} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td colSpan={11} style={{ padding: '0 20px 20px 20px', background: 'var(--accent-light)' }}>
-                              <div style={{ paddingTop: '16px' }}>
-                                {/* Diagnostic line */}
-                                <div style={{
-                                  padding: '12px 14px', marginBottom: '16px',
-                                  background: 'var(--bg-card)', border: `1px solid ${meta.color}`,
-                                  borderRadius: '8px', fontSize: '12px',
-                                  color: 'var(--text-primary)', display: 'flex', gap: '10px', alignItems: 'flex-start',
-                                }}>
-                                  <HealthIcon size={14} color={meta.color} style={{ marginTop: '1px', flexShrink: 0 }} />
-                                  <span>{diagnosticMessage(p)}</span>
-                                </div>
-
-                                {/* Funnel stats */}
-                                <div style={{ display: 'flex', gap: '28px', marginBottom: '20px', flexWrap: 'wrap' }}>
-                                  {[
-                                    { label: 'Sessions', value: fmtUnits(p.sessions) },
-                                    { label: 'Page Views', value: fmtUnits(p.page_views) },
-                                    { label: 'Views/Session', value: p.views_per_session.toFixed(2) },
-                                    { label: 'Buy Box', value: p.buy_box_pct !== null ? p.buy_box_pct.toFixed(1) + '%' : '—' },
-                                    { label: 'Conv Rate', value: p.conv_rate.toFixed(1) + '%' },
-                                    { label: 'Units', value: fmtUnits(p.units) },
-                                    ...(p.conv_change !== null ? [{ label: 'Δ Conv', value: (p.conv_change > 0 ? '+' : '') + p.conv_change.toFixed(2) + 'pp', color: p.conv_change > 0 ? 'var(--green)' : 'var(--red)' }] : []),
-                                  ].map((stat, idx) => (
-                                    <div key={idx}>
-                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>{stat.label}</div>
-                                      <div style={{ fontSize: '17px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace', color: (stat as any).color || 'var(--text-primary)' }}>{stat.value}</div>
-                                    </div>
-                                  ))}
-                                </div>
-
-                                {/* Three sparklines side by side */}
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-                                  {[
-                                    { title: 'Sessions', dataKey: 'sessions' as const, color: 'var(--accent)' },
-                                    { title: 'Conversion %', dataKey: 'conv_rate' as const, color: 'var(--green)' },
-                                    { title: 'Buy Box %', dataKey: 'buy_box_pct' as const, color: '#d97706' },
-                                  ].map(chart => (
-                                    <div key={chart.dataKey} style={{ background: 'var(--bg-card)', borderRadius: '8px', padding: '12px', border: '1px solid var(--border)' }}>
-                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>{chart.title}</div>
-                                      <ResponsiveContainer width="100%" height={100}>
-                                        <AreaChart data={allWeeklyData[p.sku] || []}>
-                                          <defs>
-                                            <linearGradient id={`grad-${chart.dataKey}-${sanitizeId(p.sku)}`} x1="0" y1="0" x2="0" y2="1">
-                                              <stop offset="5%" stopColor={chart.color} stopOpacity={0.2} />
-                                              <stop offset="95%" stopColor={chart.color} stopOpacity={0} />
-                                            </linearGradient>
-                                          </defs>
-                                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                                          <XAxis dataKey="start_date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                                          <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} width={40} />
-                                          <Tooltip content={<CustomTooltip />} />
-                                          <Area type="monotone" dataKey={chart.dataKey} name={chart.title} stroke={chart.color} strokeWidth={1.5} fill={`url(#grad-${chart.dataKey}-${sanitizeId(p.sku)})`} dot={false} />
-                                        </AreaChart>
-                                      </ResponsiveContainer>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
+                          <tr key={p.sku + '-exp'} className="traffic-diagnostic-row">
+                            <td colSpan={11}>
+                              <TrafficProductDiagnostic
+                                product={p}
+                                points={weeklyData}
+                                loading={diagnosticLoadingSku === p.sku}
+                              />
                             </td>
                           </tr>
                         )}
