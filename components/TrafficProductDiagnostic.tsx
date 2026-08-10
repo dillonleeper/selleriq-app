@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Database, PackageCheck, Search, ShieldCheck } from 'lucide-react'
+import styles from './TrafficProductDiagnostic.module.css'
 import {
   Area,
   AreaChart,
@@ -130,7 +131,7 @@ function ChartTooltip({ active, payload, label, suffix }: any) {
   const point = payload[0]?.payload as TrafficDiagnosticPoint | undefined
   const value = payload[0]?.value
   return (
-    <div className="traffic-diagnostic-tooltip">
+    <div className={styles.tooltip}>
       <strong>{label}</strong>
       <span>{Number(value).toLocaleString('en-US', { maximumFractionDigits: suffix ? 2 : 0 })}{suffix}</span>
       {point?.inventory_snapshot_date && (
@@ -154,60 +155,94 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
       : null
 
   if (loading && points.length === 0) {
-    return <div className="traffic-diagnostic-loading"><span className="cadence-loading-spinner" />Cross-referencing traffic and inventory…</div>
+    return <div className={styles.loading}><span className={styles.loadingSpinner} />Cross-referencing traffic and inventory…</div>
   }
 
+  const heroToneClass = diagnosis.tone === 'critical'
+    ? styles.heroCritical
+    : diagnosis.tone === 'warning'
+      ? styles.heroWarning
+      : ''
+
+  const exactInventoryDays = points.length - missingInventoryDays
+  const salesDays = points.length - diagnosis.missingSalesDays
+  const evidenceLimit = [
+    missingInventoryDays > 0 ? `${missingInventoryDays} day${missingInventoryDays === 1 ? '' : 's'} lack a same-day inventory snapshot.` : '',
+    diagnosis.missingSalesDays > 0 ? `${diagnosis.missingSalesDays} day${diagnosis.missingSalesDays === 1 ? '' : 's'} lack sales and traffic data.` : '',
+    'SellerIQ leaves missing dates blank instead of assuming values.',
+  ].filter(Boolean).join(' ')
+
   return (
-    <section className="traffic-diagnostic" aria-label={`Diagnostic for ${product.sku}`}>
-      <header className={`traffic-diagnostic-hero is-${diagnosis.tone}`}>
-        <div className="traffic-diagnostic-icon">
-          {diagnosis.tone === 'critical' ? <AlertTriangle size={18} /> : diagnosis.tone === 'warning' ? <Search size={18} /> : <Database size={18} />}
+    <section className={styles.panel} aria-label={`Diagnostic for ${product.sku}`}>
+      <header className={`${styles.hero} ${heroToneClass}`}>
+        <div className={styles.heroIcon}>
+          {diagnosis.tone === 'critical' ? <AlertTriangle size={17} /> : diagnosis.tone === 'warning' ? <Search size={17} /> : <Database size={17} />}
         </div>
         <div>
-          <span className="traffic-diagnostic-label">{diagnosis.label}</span>
+          <span className={styles.eyebrow}>{diagnosis.label}</span>
           <h3>{diagnosis.title}</h3>
           <p>{diagnosis.summary}</p>
         </div>
       </header>
 
-      <div className="traffic-funnel" aria-label="Traffic to order funnel">
-        <div><span>Sessions</span><strong>{integer(product.sessions)}</strong><small>Product visits</small></div>
-        <i aria-hidden="true">→</i>
-        <div><span>Page views</span><strong>{integer(product.page_views)}</strong><small>{product.views_per_session.toFixed(2)} per session</small></div>
-        <i aria-hidden="true">→</i>
-        <div className="is-outcome"><span>Units ordered</span><strong>{integer(product.units)}</strong><small>{percent(product.conv_rate)} of sessions</small></div>
+      <div className={styles.funnel} aria-label="Traffic to order funnel">
+        <div className={styles.funnelCard}>
+          <span className={styles.funnelLabel}>Sessions</span>
+          <strong className={styles.funnelValue}>{integer(product.sessions)}</strong>
+          <small className={styles.funnelMeta}>Product visits</small>
+        </div>
+        <div className={styles.funnelCard}>
+          <span className={styles.funnelLabel}>Page views</span>
+          <strong className={styles.funnelValue}>{integer(product.page_views)}</strong>
+          <small className={styles.funnelMeta}>{product.views_per_session.toFixed(2)} per session</small>
+        </div>
+        <div className={styles.funnelCard}>
+          <span className={styles.funnelLabel}>Units ordered</span>
+          <strong className={styles.funnelValue}>{integer(product.units)}</strong>
+          <small className={styles.funnelMeta}>{percent(product.conv_rate)} conversion</small>
+        </div>
       </div>
 
-      <div className="traffic-evidence-grid">
-        <section>
-          <div className="traffic-subheading"><ShieldCheck size={14} /> What SellerIQ found</div>
-          <ul className="traffic-evidence-list">
-            <li><CheckCircle2 size={13} /><span><strong>{percent(product.buy_box_pct)}</strong> average Buy Box ownership</span></li>
-            <li><PackageCheck size={13} /><span>{latestInventory
-              ? <><strong>{integer(latestInventory.available_quantity)}</strong> available in the latest attributable snapshot</>
-              : <>No attributable inventory snapshot</>}</span></li>
-            <li><Database size={13} /><span><strong>{points.length - diagnosis.missingSalesDays}</strong> sales days and <strong>{points.length - missingInventoryDays}</strong> exact inventory days observed</span></li>
-          </ul>
-        </section>
-        <section>
-          <div className="traffic-subheading"><AlertTriangle size={14} /> Evidence limits</div>
-          <p className="traffic-evidence-copy">
-            {missingInventoryDays > 0 ? `${missingInventoryDays} day${missingInventoryDays === 1 ? '' : 's'} lack a same-day inventory snapshot. ` : ''}
-            {diagnosis.missingSalesDays > 0 ? `${diagnosis.missingSalesDays} day${diagnosis.missingSalesDays === 1 ? '' : 's'} lack sales and traffic data. ` : ''}
-            SellerIQ does not fill those gaps with assumed values.
-          </p>
-        </section>
-      </div>
-
-      <section className="traffic-diagnostic-chart">
-        <div className="traffic-chart-header">
+      <div className={styles.evidence} aria-label="Diagnostic evidence">
+        <div className={styles.evidenceItem}>
+          <span className={styles.evidenceIcon}><ShieldCheck size={14} /></span>
           <div>
-            <h4>{meta.label} over time</h4>
-            <p>{metric === 'conversion' ? 'Daily units ÷ daily sessions. The dashed line is the weighted period average.' : 'Daily source observations for the selected window.'}</p>
+            <span className={styles.evidenceLabel}>Buy Box</span>
+            <strong className={styles.evidenceValue}>{percent(product.buy_box_pct)} ownership</strong>
           </div>
-          <div className="traffic-metric-tabs" role="tablist" aria-label="Diagnostic chart metric">
+        </div>
+        <div className={styles.evidenceItem}>
+          <span className={styles.evidenceIcon}><PackageCheck size={14} /></span>
+          <div>
+            <span className={styles.evidenceLabel}>Latest inventory</span>
+            <strong className={styles.evidenceValue}>{latestInventory ? `${integer(latestInventory.available_quantity)} available` : 'No matching snapshot'}</strong>
+          </div>
+        </div>
+        <div className={styles.evidenceItem}>
+          <span className={styles.evidenceIcon}><Database size={14} /></span>
+          <div>
+            <span className={styles.evidenceLabel}>Evidence coverage</span>
+            <strong className={styles.evidenceValue}>{salesDays} sales days · {exactInventoryDays} inventory days</strong>
+          </div>
+        </div>
+      </div>
+
+      <section className={styles.chart}>
+        <div className={styles.chartHeader}>
+          <div className={styles.chartTitle}>
+            <h4>{meta.label} over time</h4>
+            <p>{metric === 'conversion' ? 'Daily performance · dashed line shows the period average' : 'Daily observations across the selected range'}</p>
+          </div>
+          <div className={styles.tabs} role="tablist" aria-label="Diagnostic chart metric">
             {(Object.keys(metricMeta) as Metric[]).map(key => (
-              <button key={key} type="button" role="tab" aria-selected={metric === key} className={metric === key ? 'is-active' : ''} onClick={() => setMetric(key)}>
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={metric === key}
+                className={`${styles.tab} ${metric === key ? styles.tabActive : ''}`}
+                onClick={() => setMetric(key)}
+              >
                 {metricMeta[key].label}
               </button>
             ))}
@@ -229,14 +264,16 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
             <Area connectNulls={false} type="monotone" dataKey={meta.key} name={meta.label} stroke={meta.color} strokeWidth={2} fill={`url(#traffic-diagnostic-${metric})`} dot={{ r: 2.5, fill: meta.color }} activeDot={{ r: 4 }} />
           </AreaChart>
         </ResponsiveContainer>
-        <div className="traffic-timeline-note">
-          Missing dates remain gaps. Inventory values may use the most recent snapshot up to two days old and always disclose its age.
-        </div>
+        <div className={styles.chartNote}>Missing dates remain gaps. Inventory snapshots can be carried forward up to two days and disclose their age.</div>
       </section>
 
-      <footer className="traffic-next-step">
-        <span>Recommended next investigation</span>
+      <footer className={styles.footer}>
+        <span className={styles.footerLabel}>Next investigation</span>
         <strong>{diagnosis.next}</strong>
+        <details className={styles.details}>
+          <summary>Evidence quality</summary>
+          <p>{evidenceLimit}</p>
+        </details>
       </footer>
     </section>
   )
