@@ -27,20 +27,21 @@ export default function ExecutiveBriefing({ comparisonAvailable, comparisonLabel
   const revenueDelta = metrics.revenue - metrics.priorRevenue
   const revenueChange = metrics.priorRevenue > 0 ? (revenueDelta / metrics.priorRevenue) * 100 : null
 
+  const title = inventoryRisks.length > 0
+    ? `${inventoryRisks.length} products need inventory attention${comparisonAvailable && revenueChange !== null ? ` while revenue is ${revenueChange >= 0 ? 'up' : 'down'} ${Math.abs(revenueChange).toFixed(1)}%` : ''}.`
+    : comparisonAvailable && revenueChange !== null
+      ? `Revenue is ${revenueChange >= 0 ? 'up' : 'down'} ${Math.abs(revenueChange).toFixed(1)}% with no high-priority inventory risks.`
+      : 'No high-priority inventory risks are currently detected.'
+
   const story = comparisonAvailable && revenueChange !== null
-    ? `Revenue ${revenueDelta >= 0 ? 'increased' : 'decreased'} ${money(Math.abs(revenueDelta))} (${revenueChange >= 0 ? '+' : ''}${revenueChange.toFixed(1)}%) versus ${comparisonLabel}. ${leadingMarket ? `${leadingMarket.marketplace} accounts for ${leadingMix.toFixed(0)}% of current marketplace revenue.` : ''}`
-    : `Current performance is shown without a forced comparison. ${leadingMarket ? `${leadingMarket.marketplace} represents ${leadingMix.toFixed(0)}% of marketplace revenue.` : 'Marketplace mix is still loading.'}`
+    ? `${money(metrics.revenue)} in revenue across ${metrics.units.toLocaleString('en-US')} units. ${leadingMarket ? `${leadingMarket.marketplace} accounts for ${leadingMix.toFixed(0)}% of current marketplace revenue.` : ''}`
+    : `${money(metrics.revenue)} in revenue across ${metrics.units.toLocaleString('en-US')} units. ${leadingMarket ? `${leadingMarket.marketplace} represents ${leadingMix.toFixed(0)}% of marketplace revenue.` : 'Marketplace mix is still loading.'}`
 
   return (
     <section className="overview-briefing" aria-labelledby="briefing-heading">
       <div className="overview-eyebrow">Executive briefing</div>
-      <h2 id="briefing-heading">{money(metrics.revenue)} in ordered revenue across {metrics.units.toLocaleString('en-US')} units.</h2>
+      <h2 id="briefing-heading">{title}</h2>
       <p>{story}</p>
-      <div className="overview-briefing-chips">
-        <span><strong>{metrics.conversion.toFixed(2)}%</strong> conversion</span>
-        <span><strong>{money(metrics.asp, 2)}</strong> average selling price</span>
-        <span><strong>{inventoryRisks.length}</strong> inventory risks detected</span>
-      </div>
     </section>
   )
 }
