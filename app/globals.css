@@ -668,3 +668,15 @@ table tbody td {
   .overview-disclosure > summary { padding: 14px 16px; }
   .overview-disclosure-body { padding: 0 10px 10px; }
 }
+
+.overview-data-warning {
+  display: inline-flex;
+  margin-top: 8px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 30%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--yellow) 8%, var(--bg-card));
+  color: var(--yellow);
+  font-size: 10px;
+  line-height: 1.4;
+}
