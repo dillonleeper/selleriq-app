@@ -131,6 +131,15 @@ function addDaysKey(dateStr: string, days: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+function missingDateKeys(start: string, end: string, rows: WeeklyRow[]): string[] {
+  const present = new Set(rows.map(row => row.raw_date))
+  const missing: string[] = []
+  for (let date = start; date <= end; date = addDaysKey(date, 1)) {
+    if (!present.has(date)) missing.push(date)
+  }
+  return missing
+}
+
 function yearShiftKey(dateStr: string, years: number): string {
   const d = new Date(dateStr + 'T12:00:00')
   const month = d.getMonth()
@@ -465,6 +474,10 @@ export default function SalesOverview() {
   // Full calendar buckets drive the trend. A closing partial bucket is shown
   // separately so WTD/MTD activity cannot look like a sudden collapse.
   const effectiveEnd = dataThrough && dateRange ? (dataThrough < dateRange.endDate ? dataThrough : dateRange.endDate) : dateRange?.endDate || ''
+  const missingCurrentDates = dateRange?.startDate && effectiveEnd
+    ? missingDateKeys(dateRange.startDate, effectiveEnd, dailySeries)
+    : []
+
   const bucketed = dateRange?.startDate && effectiveEnd
     ? bucketSeries(dailySeries, chartBucket, dateRange.startDate, effectiveEnd)
     : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
@@ -547,6 +560,11 @@ export default function SalesOverview() {
               </span>
             )}
           </p>
+          {missingCurrentDates.length > 0 && !loading && (
+            <div className="overview-data-warning">
+              {missingCurrentDates.length} incomplete day{missingCurrentDates.length === 1 ? '' : 's'} excluded because one or more selected marketplaces have not loaded: {missingCurrentDates.map(fmtDateLabel).join(', ')}.
+            </div>
+          )}
         </div>
         <div className="overview-filter-bar">
           <DateRangeFilter onChange={setDateRange} defaultPreset="last_7d" anchorDate={dataThrough} />
