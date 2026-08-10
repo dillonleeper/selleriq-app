@@ -466,3 +466,110 @@ table tbody td {
   .sales-overview-page .card[style*="padding: 24px"] { padding: 17px !important; }
   .sales-overview-page .recharts-responsive-container { min-height: 220px; }
 }
+
+
+/* ─── Sales Overview narrative redesign ───────────────── */
+.overview-story {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+.overview-briefing {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(28px, 4vw, 54px);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 34%),
+    linear-gradient(135deg, var(--bg-card), color-mix(in srgb, var(--accent-light) 55%, var(--bg-card)));
+  box-shadow: 0 24px 70px rgba(15, 23, 42, .07);
+}
+.overview-briefing::after {
+  content: '';
+  position: absolute;
+  width: 250px;
+  height: 250px;
+  right: -110px;
+  bottom: -160px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 50%;
+}
+.overview-eyebrow {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+.overview-briefing h2 {
+  width: min(840px, 86%);
+  margin-top: 16px;
+  font-size: clamp(27px, 3.8vw, 52px);
+  line-height: 1.04;
+  font-weight: 640;
+  letter-spacing: -.055em;
+}
+.overview-briefing p {
+  width: min(760px, 92%);
+  margin-top: 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.overview-briefing-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 25px;
+}
+.overview-briefing-chips span {
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 74%, transparent);
+  color: var(--text-muted);
+  font-size: 10px;
+  backdrop-filter: blur(12px);
+}
+.overview-briefing-chips strong { color: var(--text-primary); }
+.overview-change-card,
+.overview-market-card { padding: 22px; }
+.overview-change-card {
+  border-left: 0 !important;
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-light));
+}
+.overview-market-card {
+  display: grid;
+  grid-template-columns: minmax(170px, .7fr) minmax(360px, 1.8fr);
+  column-gap: 28px;
+}
+.overview-market-card > div:nth-child(n+3) { grid-column: 2; }
+.overview-market-card #market-heading { grid-column: 1; grid-row: 1; }
+.overview-actions-card {
+  border-radius: 20px !important;
+  border-color: color-mix(in srgb, var(--accent) 15%, var(--border)) !important;
+}
+.overview-action-row:first-of-type {
+  margin-top: 4px;
+}
+.overview-kpis .overview-section-heading:first-child {
+  margin-bottom: 13px;
+}
+.overview-summary-panel {
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .05);
+}
+.overview-diagnostic-strip {
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--bg));
+}
+@media (max-width: 760px) {
+  .overview-briefing { padding: 27px 21px; border-radius: 19px; }
+  .overview-briefing h2, .overview-briefing p { width: 100%; }
+  .overview-briefing h2 { font-size: 30px; }
+  .overview-briefing-chips { display: grid; grid-template-columns: 1fr 1fr; }
+  .overview-briefing-chips span:last-child { grid-column: 1 / -1; }
+  .overview-market-card { display: block; }
+  .overview-market-card > div { grid-template-columns: 48px minmax(70px, 1fr) auto !important; }
+  .overview-market-card > div > span:last-child { display: none; }
+  .overview-change-card { padding: 18px; }
+}
