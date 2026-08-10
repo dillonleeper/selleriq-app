@@ -1078,3 +1078,244 @@ html, body {
   .app-content table tbody td { padding: 11px 12px !important; }
   #profitability-page { max-width: 100% !important; }
 }
+
+
+/* ─── Traffic & Conversion diagnostic workspace ───────── */
+.traffic-diagnostic-row > td {
+  padding: 0 !important;
+  background: color-mix(in srgb, var(--accent-light) 22%, var(--bg)) !important;
+}
+.traffic-diagnostic {
+  padding: clamp(20px, 2.4vw, 34px);
+  display: grid;
+  gap: 22px;
+  color: var(--text-primary);
+}
+.traffic-diagnostic-loading {
+  min-height: 220px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.traffic-diagnostic-loading .cadence-loading-spinner {
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--accent-light);
+  border-top-color: var(--accent);
+}
+.traffic-diagnostic-hero {
+  padding: 22px 24px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 15px;
+  border-radius: 18px;
+  background: var(--bg-card);
+  box-shadow: 0 1px 2px rgba(19,32,51,.035);
+}
+.traffic-diagnostic-hero.is-warning { background: linear-gradient(135deg, #fff, color-mix(in srgb, var(--yellow) 7%, #fff)); }
+.traffic-diagnostic-hero.is-critical { background: linear-gradient(135deg, #fff, color-mix(in srgb, var(--red) 6%, #fff)); }
+.traffic-diagnostic-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--accent);
+  background: var(--accent-light);
+}
+.is-warning .traffic-diagnostic-icon { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.is-critical .traffic-diagnostic-icon { color: var(--red); background: var(--red-light); }
+.traffic-diagnostic-label {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: .105em;
+  text-transform: uppercase;
+}
+.is-warning .traffic-diagnostic-label { color: var(--yellow); }
+.is-critical .traffic-diagnostic-label { color: var(--red); }
+.traffic-diagnostic-hero h3 {
+  margin-top: 6px;
+  font-size: clamp(18px, 2vw, 25px);
+  font-weight: 610;
+  line-height: 1.18;
+  letter-spacing: -.035em;
+}
+.traffic-diagnostic-hero p {
+  max-width: 900px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.traffic-funnel {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 24px minmax(150px, 1fr) 24px minmax(150px, 1fr);
+  align-items: stretch;
+  gap: 8px;
+}
+.traffic-funnel > div {
+  min-height: 104px;
+  padding: 17px 18px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  border-radius: 16px;
+  background: var(--bg-card);
+  box-shadow: 0 1px 2px rgba(19,32,51,.03);
+}
+.traffic-funnel > div.is-outcome {
+  background: linear-gradient(145deg, var(--bg-card), var(--accent-light));
+}
+.traffic-funnel > i {
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-style: normal;
+}
+.traffic-funnel span {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.traffic-funnel strong {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 23px;
+  font-weight: 610;
+  letter-spacing: -.04em;
+}
+.traffic-funnel small { color: var(--text-muted); font-size: 10px; }
+.traffic-evidence-grid {
+  display: grid;
+  grid-template-columns: 1.25fr .75fr;
+  gap: 14px;
+}
+.traffic-evidence-grid > section {
+  padding: 19px 20px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.64);
+  box-shadow: inset 0 0 0 1px rgba(23,25,28,.045);
+}
+.traffic-subheading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 620;
+}
+.traffic-evidence-list {
+  margin-top: 13px;
+  display: grid;
+  gap: 9px;
+  list-style: none;
+}
+.traffic-evidence-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.traffic-evidence-list li svg { margin-top: 1px; color: var(--green); }
+.traffic-evidence-list strong { color: var(--text-primary); font-family: var(--font-geist-mono), ui-monospace, monospace; }
+.traffic-evidence-copy {
+  margin-top: 13px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.traffic-diagnostic-chart {
+  padding: 21px 22px 15px;
+  border-radius: 18px;
+  background: var(--bg-card);
+  box-shadow: 0 1px 2px rgba(19,32,51,.035), 0 12px 34px rgba(19,32,51,.035);
+}
+.traffic-chart-header {
+  margin-bottom: 17px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.traffic-chart-header h4 { font-size: 13px; font-weight: 620; }
+.traffic-chart-header p { margin-top: 4px; color: var(--text-dim); font-size: 9px; }
+.traffic-metric-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+.traffic-metric-tabs button {
+  min-height: 28px !important;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+.traffic-metric-tabs button.is-active {
+  color: var(--accent);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  font-weight: 650;
+}
+.traffic-diagnostic-tooltip {
+  min-width: 125px;
+  padding: 9px 11px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+}
+.traffic-diagnostic-tooltip strong { color: var(--text-muted); font-size: 9px; font-weight: 560; }
+.traffic-diagnostic-tooltip span { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 12px; font-weight: 620; }
+.traffic-diagnostic-tooltip small { color: var(--text-dim); font-size: 8px; }
+.traffic-timeline-note {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+.traffic-next-step {
+  padding: 17px 19px;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 16px;
+  border-radius: 14px;
+  background: var(--text-primary);
+  color: var(--bg-card);
+}
+.traffic-next-step span {
+  opacity: .62;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.traffic-next-step strong { font-size: 11px; font-weight: 520; line-height: 1.5; }
+
+@media (max-width: 900px) {
+  .traffic-evidence-grid { grid-template-columns: 1fr; }
+  .traffic-chart-header { align-items: stretch; flex-direction: column; }
+  .traffic-metric-tabs { align-self: flex-start; flex-wrap: wrap; }
+}
+@media (max-width: 680px) {
+  .traffic-diagnostic { padding: 16px 12px; gap: 15px; }
+  .traffic-diagnostic-hero { padding: 18px 16px; grid-template-columns: 32px minmax(0,1fr); }
+  .traffic-diagnostic-icon { width: 32px; height: 32px; border-radius: 10px; }
+  .traffic-funnel { grid-template-columns: 1fr; }
+  .traffic-funnel > i { transform: rotate(90deg); min-height: 12px; }
+  .traffic-funnel > div { min-height: 88px; }
+  .traffic-diagnostic-chart { padding: 17px 12px 12px; }
+  .traffic-next-step { grid-template-columns: 1fr; gap: 7px; }
+}
