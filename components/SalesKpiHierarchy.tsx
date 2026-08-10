@@ -2,7 +2,7 @@
 
 import {
   BarChart2, Boxes, DollarSign, Eye, LockKeyhole,
-  MousePointer, Percent, ShoppingCart
+  Percent, ShoppingCart
 } from 'lucide-react'
 
 type Props = {
@@ -87,9 +87,7 @@ function Diagnostic({ label, value, detail, icon, color }: DiagnosticProps) {
 }
 
 export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, comparisonComplete, metrics }: Props) {
-  const noComparison = `No complete ${comparisonLabel}`
-  const comparisonDetail = (priorValue: string) =>
-    comparisonComplete ? `${priorValue} ${comparisonLabel}` : noComparison
+  const comparisonDetail = (priorValue: string) => comparisonComplete ? `${priorValue} ${comparisonLabel}` : ''
 
   const lockedItems = [
     { label: 'Contribution profit', reason: 'Connect Amazon Ads and landed product cost' },
@@ -104,7 +102,7 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
           <h2 id="business-outcomes-heading">Business outcomes</h2>
           <p>Primary KPIs · {rangeLabel}</p>
         </div>
-        <span>Verified economics only</span>
+        <span>{comparisonComplete ? `Compared with ${comparisonLabel}` : 'Current period · comparison unavailable'}</span>
       </div>
 
       <div className="overview-summary-panel">
@@ -118,12 +116,11 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
           color="var(--accent)"
         />
         <SummaryMetric
-          label="Units ordered"
-          value={integer(metrics.units)}
-          detail={comparisonDetail(integer(metrics.priorUnits))}
-          delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null}
-          icon={<ShoppingCart size={16} />}
-          color="var(--green)"
+          label="Buy Box ownership"
+          value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'}
+          detail={comparisonDetail(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')}
+          icon={<Boxes size={16} />}
+          color="var(--accent)"
         />
         <SummaryMetric
           label="Revenue refund rate"
@@ -144,7 +141,7 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
       <div className="overview-unlock-strip" aria-label="Metrics awaiting connected data">
         <div className="overview-unlock-intro">
           <LockKeyhole size={15} />
-          <div><strong>Unlock full economics</strong><span>Three KPIs need additional sources</span></div>
+          <div><strong>Profitability metrics pending</strong><span>Connect Amazon Ads and landed product costs</span></div>
         </div>
         {lockedItems.map(item => (
           <div key={item.label} className="overview-locked-kpi">
@@ -164,8 +161,8 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
         <Diagnostic label="Sessions" value={integer(metrics.sessions)} detail={comparisonDetail(integer(metrics.priorSessions))} icon={<Eye size={15} />} color="var(--yellow)" />
         <Diagnostic label="Conversion" value={`${metrics.conversion.toFixed(2)}%`} detail={comparisonDetail(`${metrics.priorConversion.toFixed(2)}%`)} icon={<Percent size={15} />} color="#EC4899" />
         <Diagnostic label="Avg. selling price" value={money(metrics.asp, 2)} detail={comparisonDetail(money(metrics.priorAsp, 2))} icon={<BarChart2 size={15} />} color="#6366F1" />
-        <Diagnostic label="Page views" value={integer(metrics.pageViews)} detail={comparisonDetail(integer(metrics.priorPageViews))} icon={<MousePointer size={15} />} color="#10B981" />
-        <Diagnostic label="Buy Box" value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'} detail={comparisonDetail(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')} icon={<Boxes size={15} />} color="var(--accent)" />
+        <Diagnostic label="Units ordered" value={integer(metrics.units)} detail={comparisonDetail(integer(metrics.priorUnits))} icon={<ShoppingCart size={15} />} color="var(--green)" />
+        <Diagnostic label="Selling SKUs" value={integer(metrics.sellingSkus)} detail="Products with at least one unit" icon={<Boxes size={15} />} color="var(--accent)" />
       </div>
     </section>
   )
