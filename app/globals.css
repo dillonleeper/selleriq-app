@@ -854,3 +854,227 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .fade-up, [class*="fade-up-delay"] { animation: none !important; opacity: 1 !important; }
 }
+
+
+/* ─── SellerIQ shared analytics design system ──────────── */
+/* Extends the approved Sales Overview visual language to every analytics route. */
+.app-content {
+  --surface-radius: 18px;
+  --control-radius: 10px;
+  --section-gap: 26px;
+}
+.app-content > div:not(.sales-overview-page) {
+  width: 100%;
+  max-width: 1560px;
+}
+.app-content > div:not(.sales-overview-page) > div:first-child h1,
+.app-content #profitability-page > div:first-of-type h1 {
+  color: var(--text-primary);
+  font-size: clamp(21px, 2vw, 27px) !important;
+  font-weight: 610 !important;
+  letter-spacing: -.04em !important;
+  line-height: 1.15;
+}
+.app-content h2,
+.app-content h3 {
+  letter-spacing: -.025em;
+}
+.app-content [style*="JetBrains Mono"] {
+  font-family: var(--font-geist-mono), ui-monospace, monospace !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Consistent controls with touch-safe targets and subdued chrome. */
+.app-main button,
+.app-main input,
+.app-main select {
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.app-main input,
+.app-main select {
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.app-main input:focus,
+.app-main select:focus {
+  border-color: var(--accent-border) !important;
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+.app-main button {
+  transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease;
+}
+.app-main button:active { transform: translateY(1px); }
+.app-main button:focus-visible,
+.app-main a:focus-visible,
+.app-main summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Cards behave as calm content surfaces, not outlined widgets. */
+.app-content > div:not(.sales-overview-page) .card {
+  border-color: transparent;
+  border-radius: var(--surface-radius);
+  box-shadow: 0 1px 2px rgba(19,32,51,.035), 0 10px 30px rgba(19,32,51,.035);
+}
+.app-content > div:not(.sales-overview-page) .card:hover {
+  border-color: transparent;
+}
+.app-content > div:not(.sales-overview-page) .card + .card {
+  margin-top: 16px;
+}
+
+/* Tabs read as navigation and not a row of unrelated buttons. */
+.app-content [role="tablist"],
+.app-content nav[aria-label*="tab" i] {
+  border-bottom-color: var(--border) !important;
+}
+.app-content [role="tab"] {
+  font-weight: 560 !important;
+  letter-spacing: -.015em;
+}
+
+/* Dense tables retain information while losing spreadsheet harshness. */
+.app-content table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.app-content table thead th {
+  height: 42px;
+  padding: 10px 14px !important;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, var(--bg-card)) !important;
+  border-bottom-color: var(--border) !important;
+  color: #6c7581 !important;
+  font-size: 9px !important;
+  font-weight: 650 !important;
+  letter-spacing: .065em !important;
+}
+.app-content table tbody td {
+  padding: 12px 14px !important;
+  border-bottom-color: var(--border) !important;
+  font-size: 11px;
+}
+.app-content table tbody tr {
+  transition: background .12s ease;
+}
+.app-content table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent-light) 34%, var(--bg-card));
+}
+.app-content table tbody tr:last-child td { border-bottom-color: transparent !important; }
+.app-content .card:has(> table),
+.app-content .card:has(> div > table) {
+  overflow: hidden;
+}
+
+/* Search and filter rows become a single, visually quiet command layer. */
+.app-content input[type="search"],
+.app-content input[placeholder*="Search" i] {
+  min-height: 42px;
+  border-color: transparent !important;
+  border-radius: 12px !important;
+  background: var(--bg-card) !important;
+  box-shadow: 0 1px 2px rgba(19,32,51,.04), 0 7px 22px rgba(19,32,51,.025);
+}
+.app-content input[type="search"]:focus,
+.app-content input[placeholder*="Search" i]:focus {
+  border-color: var(--accent-border) !important;
+  box-shadow: 0 0 0 3px var(--accent-light), 0 8px 24px rgba(19,32,51,.04);
+}
+
+/* Product Performance: protect cadence density and make loading feel native. */
+.app-content .cadence-scroll {
+  border-radius: 16px !important;
+  border-color: transparent !important;
+  background: var(--bg-card);
+  box-shadow: 0 1px 2px rgba(19,32,51,.035);
+}
+.app-content .cadence-scroll table td:first-child,
+.app-content .cadence-scroll table th:first-child {
+  padding-left: 18px !important;
+}
+.app-content .cadence-loading-spinner {
+  border-radius: 999px !important;
+  box-shadow: 0 0 0 8px var(--accent-light);
+}
+
+/* Profitability: financial traceability stays precise but no longer feels like an iframe. */
+#profitability-page {
+  max-width: 1560px !important;
+}
+#profitability-page .profitability-table {
+  table-layout: fixed;
+}
+#profitability-page .profitability-table th,
+#profitability-page .profitability-table td {
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
+}
+#profitability-page .profitability-table tbody tr[style*="accent-light"] {
+  background: color-mix(in srgb, var(--accent-light) 55%, var(--bg-card)) !important;
+}
+
+/* Inventory: urgency is visible through signal color, not heavy containers. */
+.app-content table tr[style*="accent-light"] {
+  background: color-mix(in srgb, var(--accent-light) 58%, var(--bg-card)) !important;
+}
+.app-content table tr[style*="accent-light"] + tr > td {
+  background: color-mix(in srgb, var(--accent-light) 18%, var(--bg-card));
+}
+.app-content svg { flex-shrink: 0; }
+
+/* Chart cards are generous and neutral; data color does the talking. */
+.app-content .recharts-responsive-container {
+  font-family: var(--font-geist-sans), sans-serif;
+}
+.app-content .recharts-cartesian-grid line {
+  stroke: color-mix(in srgb, var(--border) 78%, transparent);
+}
+.app-content .recharts-text {
+  fill: var(--text-dim);
+  font-size: 10px;
+}
+
+/* Dark mode mirrors hierarchy rather than reverting to outlined panels. */
+[data-theme="dark"] .app-content > div:not(.sales-overview-page) .card {
+  border-color: rgba(255,255,255,.035);
+  box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 14px 34px rgba(0,0,0,.12);
+}
+[data-theme="dark"] .app-content input[type="search"],
+[data-theme="dark"] .app-content input[placeholder*="Search" i] {
+  background: var(--bg-card) !important;
+}
+
+/* Shared responsive behavior across all analytics routes. */
+@media (max-width: 900px) {
+  .app-content > div:not(.sales-overview-page) > div:first-child {
+    gap: 14px !important;
+  }
+  .app-content table {
+    min-width: max-content;
+  }
+  .app-content .card:has(table) {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+}
+@media (max-width: 760px) {
+  .app-content { --surface-radius: 15px; --section-gap: 20px; }
+  .app-content > div:not(.sales-overview-page) > div:first-child {
+    align-items: flex-start !important;
+    flex-direction: column;
+    margin-bottom: 18px !important;
+  }
+  .app-content > div:not(.sales-overview-page) > div:first-child > div:last-child {
+    width: 100%;
+    justify-content: flex-start !important;
+  }
+  .app-main button,
+  .app-main select {
+    min-height: 36px;
+  }
+  .app-content table thead th { padding: 9px 12px !important; }
+  .app-content table tbody td { padding: 11px 12px !important; }
+  #profitability-page { max-width: 100% !important; }
+}
