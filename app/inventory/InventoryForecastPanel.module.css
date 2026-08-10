@@ -1,0 +1,304 @@
+.panel {
+  padding: clamp(16px, 2vw, 24px);
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.action {
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--chart-warning) 25%, var(--border));
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--bg-card), color-mix(in srgb, var(--chart-warning) 6%, var(--bg-card)));
+}
+
+.actionEyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--chart-warning);
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.action h3 {
+  margin: 0;
+  font-size: clamp(18px, 2vw, 25px);
+  font-weight: 680;
+  line-height: 1.18;
+  letter-spacing: -.03em;
+}
+
+.action p {
+  max-width: 780px;
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.actionQuantity {
+  min-width: 120px;
+  padding-left: 18px;
+  border-left: 1px solid var(--border);
+  text-align: right;
+}
+
+.actionQuantity span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 680;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.actionQuantity strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--accent);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 22px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+}
+
+.stat {
+  padding: 14px 17px;
+}
+
+.stat + .stat { border-left: 1px solid var(--border); }
+
+.stat span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 680;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.stat strong {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.stat small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.timeline {
+  padding: 14px 17px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+}
+
+.timelineStep {
+  position: relative;
+  min-width: 0;
+  padding-right: 18px;
+}
+
+.timelineStep:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 12px;
+  right: -2px;
+  height: 1px;
+  background: var(--border);
+}
+
+.timelineDot {
+  position: relative;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  display: block;
+  margin-bottom: 8px;
+  border: 3px solid var(--bg-card);
+  border-radius: 999px;
+  background: var(--text-dim);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.timelineStepImportant .timelineDot { background: var(--chart-warning); }
+.timelineStepDanger .timelineDot { background: var(--red); }
+
+.timelineStep span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 660;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.timelineStep strong {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chartCard {
+  padding: 16px 16px 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-card);
+}
+
+.chartHeader {
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.chartHeader h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 660;
+}
+
+.chartHeader p {
+  margin: 3px 0 0;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.chartKey {
+  display: inline-flex;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.chartKey span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chartKey i {
+  width: 8px;
+  height: 8px;
+  display: inline-block;
+  border-radius: 2px;
+}
+
+.actualKey { background: var(--chart-primary); }
+.forecastKey { background: var(--chart-secondary); }
+
+.chartNote {
+  margin: 2px 0 0;
+  color: var(--text-dim);
+  font-size: 8px;
+}
+
+.empty {
+  padding: 26px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+}
+
+.details summary {
+  padding: 11px 14px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 640;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.detailsGrid {
+  padding: 0 14px 13px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.detailItem {
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+}
+
+.detailItem span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.detailItem strong {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.tooltip {
+  min-width: 135px;
+  padding: 9px 11px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+  font-size: 10px;
+}
+
+.tooltip span { color: var(--text-muted); }
+.tooltip strong { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 12px; }
+
+@media (max-width: 820px) {
+  .action { grid-template-columns: 1fr; }
+  .actionQuantity { padding: 0; border-left: 0; text-align: left; }
+  .detailsGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .panel { padding: 12px 9px; }
+  .stats { grid-template-columns: 1fr; }
+  .stat + .stat { border-left: 0; border-top: 1px solid var(--border); }
+  .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 6px; }
+  .timelineStep:nth-child(2)::after { display: none; }
+  .chartHeader { flex-direction: column; }
+  .detailsGrid { grid-template-columns: 1fr; }
+}
