@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
+import forecastStyles from './InventoryForecastPanel.module.css'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
   ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download, Upload,
@@ -318,18 +319,20 @@ function SortIcon({ col, cur, dir }: { col: string, cur: string, dir: SortDir })
 }
 
 // ─── Forecast Tooltip ─────────────────────────────────────────
-const ForecastTooltip = ({ active, payload, label }: any) => {
+const ForecastTooltip = ({ active, payload, label, kind = 'demand' }: any) => {
   if (!active || !payload?.length) return null
-  const pointLabel = payload[0]?.payload?.label || label
-  const pointPhase = payload[0]?.payload?.demandPhase
+  const point = payload[0]?.payload as ForecastPoint | undefined
+  const pointLabel = point?.label || label
+  const value = Number(payload[0]?.value) || 0
   return (
-    <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', boxShadow: 'var(--shadow-md)' }}>
-      <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>{pointLabel}</div>
-      {payload.filter((p: any) => Number(p.value) > 0).map((p: any, i: number) => (
-        <div key={i} style={{ color: p.color, fontWeight: 500 }}>
-          {pointPhase === 'forecast' ? 'Forecast demand' : 'Actual demand'}: <span style={{ color: 'var(--text-primary)' }}>{fmt(p.value)} units</span>
-        </div>
-      ))}
+    <div className={forecastStyles.tooltip}>
+      <span>{pointLabel}</span>
+      <strong>{fmt(value)} units</strong>
+      <small>{kind === 'inventory'
+        ? 'Projected inventory'
+        : point?.demandPhase === 'forecast'
+          ? 'Expected daily demand'
+          : 'Actual daily sales'}</small>
     </div>
   )
 }
@@ -362,176 +365,191 @@ function ForecastPanel({
   const points = buildForecast(startInventory, avgDailyUnits, cappedHorizon, salesHistory)
   const xTickLabels = Object.fromEntries(points.map(point => [point.dateKey, point.tickLabel]))
   const forecastStartPoint = points.find(point => point.demandPhase === 'forecast' && point.demand > 0) || null
-
-  // Find stockout day index
-  const stockoutIndex = points.findIndex(p => p.inventory === 0)
+  const stockoutIndex = points.findIndex(point => point.inventory === 0)
   const stockoutLabel = stockoutIndex > 0 ? points[stockoutIndex].label : null
-
-  // Order by label
-  const orderByLabel = orderByDays != null && orderByDays >= 0
-    ? addDays(orderByDays)
-    : null
-
-  const lineColor = avgDailyUnits === 0
-    ? 'var(--chart-success)'
-    : stockoutIndex > 0 && stockoutIndex < points.length - 1
-      ? 'var(--red)'
-      : 'var(--chart-warning)'
-
-  const summaryText = (() => {
-    if (avgDailyUnits === 0) return 'No sales velocity data - forecast unavailable.'
-    if (stockoutLabel && orderByDays != null && orderByDays <= 0) {
-      return `At ${avgDailyUnits.toFixed(1)} units/day, you'll run out ${stockoutLabel}. Your ${Math.round(horizonDays - (thresholdUnits ? thresholdUnits / avgDailyUnits : 0))}d lead time means you should have ordered already - order now.`
-    }
-    if (stockoutLabel && orderByLabel) {
-      return `At ${avgDailyUnits.toFixed(1)} units/day, you'll run out ${stockoutLabel}. Your lead time means you must place the order by ${orderByLabel} to avoid a stockout.`
-    }
-    if (stockoutLabel) {
-      return `At ${avgDailyUnits.toFixed(1)} units/day, you'll run out ${stockoutLabel}. Order soon to avoid a stockout.`
-    }
-    if (orderByLabel) {
-      return `At ${avgDailyUnits.toFixed(1)} units/day, inventory will last through the forecast window. Place your next order by ${orderByLabel} to stay on track.`
-    }
-    return `At ${avgDailyUnits.toFixed(1)} units/day, inventory is healthy through the forecast window.`
-  })()
-
+  const orderByLabel = orderByDays != null && orderByDays >= 0 ? addDays(orderByDays) : null
   const orderByPinLabel = (() => {
     if (orderByDays == null || orderByDays < 0) return null
     const orderDate = new Date()
     orderDate.setDate(orderDate.getDate() + Math.round(orderByDays))
-    const orderDateKey = dateKeyFromDate(orderDate)
-    const matchingPoint = points.find(point => point.dateKey === orderDateKey)
-    return matchingPoint ? { dateKey: matchingPoint.dateKey, label: matchingPoint.label } : null
+    const match = points.find(point => point.dateKey === dateKeyFromDate(orderDate))
+    return match ? { dateKey: match.dateKey, label: match.label } : null
   })()
 
-  const summaryColor = stockoutLabel
-    ? (orderByDays != null && orderByDays <= 0 ? 'var(--red)' : 'var(--chart-warning)')
-    : 'var(--text-muted)'
+  const leadTimeDays = avgDailyUnits > 0 && thresholdUnits != null
+    ? Math.max(0, Math.round(thresholdUnits / avgDailyUnits))
+    : 0
+  const daysLeft = avgDailyUnits > 0 ? Math.max(0, Math.floor(startInventory / avgDailyUnits)) : null
+  const orderQuantity = statsRight.find(stat => stat.label === 'Units to Order')?.value || '—'
+  const needsOrder = orderQuantity !== '✓ Covered' && orderQuantity !== '—' && orderQuantity !== '0'
+  const actionHeadline = avgDailyUnits <= 0
+    ? 'Sales history is needed before placing an order'
+    : !needsOrder
+      ? 'No order is needed yet'
+      : orderByDays != null && orderByDays <= 0
+        ? `Order ${orderQuantity} units now`
+        : orderByLabel
+          ? `Order ${orderQuantity} units by ${orderByLabel}`
+          : `Plan an order for ${orderQuantity} units`
+  const actionSummary = avgDailyUnits <= 0
+    ? 'SellerIQ cannot estimate when inventory will run out without a recent sales rate.'
+    : stockoutLabel
+      ? `At ${avgDailyUnits.toFixed(1)} units per day, inventory is projected to run out around ${stockoutLabel}. The supplier lead time is about ${leadTimeDays} days.`
+      : `At ${avgDailyUnits.toFixed(1)} units per day, inventory remains available through this forecast window.`
+  const arrivalLabel = orderByDays != null
+    ? addDays(Math.max(0, Math.round(orderByDays)) + leadTimeDays)
+    : 'Not scheduled'
+  const plainLabel = (label: string) => ({
+    'Total Inventory': 'Inventory now',
+    'FBA': 'Amazon inventory',
+    'Warehouse Total': 'Warehouse inventory',
+    'Avg/Day': 'Sells per day',
+    'Days Cover': 'Days left',
+    'Units to Order': 'Order quantity',
+  }[label] || label)
 
   return (
-    <div style={{ padding: '16px 20px 20px', background: 'var(--bg-elevated)', borderTop: '1px solid var(--border)' }}>
+    <div className={forecastStyles.panel}>
+      <section className={forecastStyles.action}>
+        <div>
+          <span className={forecastStyles.actionEyebrow}>Recommended action</span>
+          <h3>{actionHeadline}</h3>
+          <p>{actionSummary}</p>
+        </div>
+        <div className={forecastStyles.actionQuantity}>
+          <span>Order quantity</span>
+          <strong>{needsOrder ? orderQuantity : 'On track'}</strong>
+        </div>
+      </section>
 
-      <div style={{
-        fontSize: '13px', lineHeight: '1.5', marginBottom: '16px',
-        padding: '10px 14px', borderRadius: '8px',
-        background: stockoutLabel ? 'var(--chart-danger-fill)' : 'var(--bg-hover)',
-        border: `1px solid ${stockoutLabel ? 'var(--red-light)' : 'var(--border)'}`,
-        color: summaryColor, fontWeight: 500,
-      }}>
-        {summaryText}
+      <div className={forecastStyles.stats} aria-label="Inventory summary">
+        <div className={forecastStyles.stat}>
+          <span>Inventory now</span>
+          <strong>{fmt(startInventory)}</strong>
+          <small>Amazon plus warehouse stock</small>
+        </div>
+        <div className={forecastStyles.stat}>
+          <span>Sells per day</span>
+          <strong>{avgDailyUnits > 0 ? avgDailyUnits.toFixed(1) : '—'}</strong>
+          <small>Recent daily average</small>
+        </div>
+        <div className={forecastStyles.stat}>
+          <span>Days left</span>
+          <strong>{daysLeft == null ? '—' : `${daysLeft} days`}</strong>
+          <small>Inventory ÷ daily sales</small>
+        </div>
       </div>
 
-      {/* Stats row */}
-      <div style={{ display: 'flex', gap: '32px', marginBottom: '16px', flexWrap: 'wrap' }}>
-        {[...statsLeft, ...statsRight].map((s, i) => (
-          <div key={i}>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>{s.label}</div>
-            <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: s.color || 'var(--text-primary)' }}>{s.value}</div>
+      <div className={forecastStyles.timeline} aria-label="Reorder timeline">
+        {[
+          { label: 'Today', value: addDays(0), className: '' },
+          { label: orderByDays != null && orderByDays <= 0 ? 'Order now' : 'Order by', value: orderByLabel || 'Not scheduled', className: forecastStyles.timelineStepImportant },
+          { label: 'Expected arrival', value: arrivalLabel, className: '' },
+          { label: 'Projected stockout', value: stockoutLabel || 'Beyond forecast', className: stockoutLabel ? forecastStyles.timelineStepDanger : '' },
+        ].map(item => (
+          <div key={item.label} className={`${forecastStyles.timelineStep} ${item.className}`}>
+            <i className={forecastStyles.timelineDot} aria-hidden="true" />
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
           </div>
         ))}
       </div>
 
-      {/* Chart - inventory line plus daily demand bars */}
       {avgDailyUnits > 0 ? (
-        <ResponsiveContainer width="100%" height={220}>
-          <ComposedChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis
-              dataKey="dateKey"
-              tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
-              tickLine={false}
-              axisLine={false}
-              interval={0}
-              minTickGap={18}
-              tickFormatter={value => xTickLabels[value] || ''}
-            />
-            <YAxis
-              tick={{ fontSize: 9, fill: 'var(--text-dim)' }}
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={v => fmt(v)}
-              width={50}
-              domain={[0, Math.round(startInventory * 1.1)]}
-            />
-            <Tooltip content={<ForecastTooltip />} />
+        <>
+          <section className={forecastStyles.chartCard}>
+            <div className={forecastStyles.chartHeader}>
+              <div>
+                <h4>When inventory will run out</h4>
+                <p>Projected inventory remaining each day</p>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={205}>
+              <ComposedChart data={points} margin={{ top: 12, right: 18, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="dateKey" tick={false} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={value => fmt(value)} width={50} domain={[0, Math.max(1, Math.round(startInventory * 1.1))]} />
+                <Tooltip content={<ForecastTooltip kind="inventory" />} />
+                {thresholdUnits != null && thresholdUnits > 0 && (
+                  <>
+                    <ReferenceArea y1={0} y2={thresholdUnits} fill="var(--chart-danger-fill)" fillOpacity={0.45} />
+                    <ReferenceLine
+                      y={thresholdUnits}
+                      stroke={thresholdColor || 'var(--chart-warning)'}
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      label={{ value: `Order threshold · ${leadTimeDays}d lead time`, position: 'insideTopRight', fontSize: 9, fill: thresholdColor || 'var(--chart-warning)' }}
+                    />
+                  </>
+                )}
+                {orderByPinLabel && (
+                  <ReferenceLine
+                    x={orderByPinLabel.dateKey}
+                    stroke="var(--chart-warning)"
+                    strokeWidth={2}
+                    label={{ value: `Order by ${orderByPinLabel.label}`, position: 'insideTopLeft', fontSize: 9, fill: 'var(--chart-warning)', fontWeight: 700 }}
+                  />
+                )}
+                <Line type="monotone" dataKey="inventory" name="Inventory" stroke="var(--chart-primary)" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </section>
 
-            <Bar
-              dataKey="demand"
-              name="Demand"
-              radius={[2, 2, 0, 0]}
-              barSize={4}
-            >
-              {points.map(point => (
-                <Cell
-                  key={`demand-${point.dateKey}`}
-                  fill={point.demandPhase === 'forecast' ? 'var(--chart-secondary-fill)' : 'var(--chart-primary-fill)'}
-                  stroke={point.demandPhase === 'forecast' ? 'var(--chart-secondary)' : 'var(--chart-primary)'}
-                />
-              ))}
-            </Bar>
-
-            {forecastStartPoint && (
-              <ReferenceLine
-                x={forecastStartPoint.dateKey}
-                stroke="var(--chart-secondary)"
-                strokeWidth={1.5}
-                strokeDasharray="5 3"
-                label={{ value: 'Forecast starts', position: 'insideTopRight', fontSize: 9, fill: 'var(--chart-secondary)', fontWeight: 700 }}
-              />
-            )}
-
-            {/* Threshold line - reorder trigger */}
-            {thresholdUnits != null && thresholdUnits > 0 && (
-              <ReferenceLine
-                y={thresholdUnits}
-                stroke={thresholdColor || 'var(--chart-warning)'}
-                strokeWidth={1}
-                strokeDasharray="4 2"
-                label={{ value: thresholdLabel || 'Reorder', position: 'insideTopRight', fontSize: 9, fill: thresholdColor || 'var(--chart-warning)' }}
-              />
-            )}
-
-            {/* Danger zone below threshold */}
-            {thresholdUnits != null && thresholdUnits > 0 && (
-              <ReferenceArea y1={0} y2={thresholdUnits} fill="var(--chart-danger-fill)" />
-            )}
-
-            {/* Vertical order-by pin - matched to nearest data point */}
-            {orderByPinLabel && (
-              <ReferenceLine
-                x={orderByPinLabel.dateKey}
-                stroke="var(--chart-warning)"
-                strokeWidth={2}
-                label={{ value: `Order by ${orderByPinLabel.label}`, position: 'insideTopLeft', fontSize: 9, fill: 'var(--chart-warning)', fontWeight: 700 }}
-              />
-            )}
-
-            {/* Inventory depletion line */}
-            <Line
-              type="monotone"
-              dataKey="inventory"
-              name="Inventory"
-              stroke={lineColor}
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 5 }}
-            />
-          </ComposedChart>
-        </ResponsiveContainer>
+          <section className={forecastStyles.chartCard}>
+            <div className={forecastStyles.chartHeader}>
+              <div>
+                <h4>Daily sales and expected demand</h4>
+                <p>Separate scale so daily units remain readable</p>
+              </div>
+              <div className={forecastStyles.chartKey} aria-label="Demand chart legend">
+                <span><i className={forecastStyles.actualKey} />Actual sales</span>
+                <span><i className={forecastStyles.forecastKey} />Future estimate</span>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={112}>
+              <ComposedChart data={points} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="dateKey" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval={0} minTickGap={20} tickFormatter={value => xTickLabels[value] || ''} />
+                <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} width={50} domain={[0, (maximum: number) => Math.max(1, Math.ceil(maximum * 1.25))]} />
+                <Tooltip content={<ForecastTooltip kind="demand" />} />
+                <Bar dataKey="demand" name="Daily units" radius={[2, 2, 0, 0]} barSize={5}>
+                  {points.map(point => (
+                    <Cell
+                      key={`demand-${point.dateKey}`}
+                      fill={point.demandPhase === 'forecast' ? 'var(--chart-secondary-fill)' : 'var(--chart-primary-fill)'}
+                      stroke={point.demandPhase === 'forecast' ? 'var(--chart-secondary)' : 'var(--chart-primary)'}
+                    />
+                  ))}
+                </Bar>
+                {forecastStartPoint && (
+                  <ReferenceLine
+                    x={forecastStartPoint.dateKey}
+                    stroke="var(--chart-secondary)"
+                    strokeWidth={1.5}
+                    strokeDasharray="5 3"
+                    label={{ value: 'Future estimate begins', position: 'insideTopRight', fontSize: 9, fill: 'var(--chart-secondary)', fontWeight: 650 }}
+                  />
+                )}
+              </ComposedChart>
+            </ResponsiveContainer>
+            <p className={forecastStyles.chartNote}>Forecast covers {cappedHorizon} days and uses an average of {avgDailyUnits.toFixed(1)} units per day.</p>
+          </section>
+        </>
       ) : (
-        <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-dim)' }}>
-          No sales velocity data — forecast unavailable
-        </div>
+        <div className={forecastStyles.empty}>No recent sales history—forecast unavailable.</div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', gap: '12px' }}>
-        <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-          Blue bars show the last 14 days of actual sales. Violet bars begin immediately after that and show the forecast demand.
+      <details className={forecastStyles.details}>
+        <summary>How this was calculated</summary>
+        <div className={forecastStyles.detailsGrid}>
+          {[...statsLeft, ...statsRight].map(stat => (
+            <div key={stat.label} className={forecastStyles.detailItem}>
+              <span>{plainLabel(stat.label)}</span>
+              <strong style={{ color: stat.color || 'var(--text-primary)' }}>{stat.value}</strong>
+            </div>
+          ))}
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-          Forecast horizon: {cappedHorizon} days · Based on {avgDailyUnits.toFixed(1)} units/day avg
-        </div>
-      </div>
+      </details>
     </div>
   )
 }
