@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { Analytics } from '@vercel/analytics/next'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import './globals.css'
-import Sidebar from '@/components/Sidebar'
+import AppShell from '@/components/AppShell'
 import { ThemeProvider } from '@/context/ThemeContext'
 
 export const metadata: Metadata = {
@@ -15,20 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <ThemeProvider>
-          <div style={{ display: 'flex', minHeight: '100vh' }}>
-            <Sidebar />
-            <main style={{
-              flex: 1,
-              marginLeft: '220px',
-              padding: '32px 40px',
-              minHeight: '100vh',
-              background: 'var(--bg)',
-            }}>
-              <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-                {children}
-              </div>
-            </main>
-          </div>
+          <AppShell>{children}</AppShell>
           <Analytics />
           <SpeedInsights />
         </ThemeProvider>
