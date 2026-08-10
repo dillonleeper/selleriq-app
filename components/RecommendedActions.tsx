@@ -199,6 +199,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
   const [preferences, setPreferences] = useState<Record<string, ActionPreference>>(EMPTY_PREFERENCES)
   const [preferencesLoaded, setPreferencesLoaded] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   const [now, setNow] = useState(0)
 
   useEffect(() => {
@@ -224,9 +225,10 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
 
   const hiddenCount = preferencesLoaded ? actions.filter(action => isHidden(preferences[action.id], now)).length : 0
   const displayedActions = showHidden ? actions : actions.filter(action => !preferencesLoaded || !isHidden(preferences[action.id], now))
+  const visibleActions = showAll ? displayedActions : displayedActions.slice(0, 3)
 
   return (
-    <section className="card" aria-labelledby="actions-heading" style={{ padding: 20 }}>
+    <section className="card overview-actions-card" aria-labelledby="actions-heading">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <div>
           <div id="actions-heading" style={{ fontSize: 13, fontWeight: 600 }}>Recommended actions</div>
@@ -248,11 +250,11 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
           : hiddenCount > 0
             ? 'All current actions are dismissed or snoozed.'
             : 'No supported high-priority actions for this selection.'}</div>
-      ) : displayedActions.map((action, index) => {
+      ) : visibleActions.map((action, index) => {
         const preference = preferences[action.id]
         const hidden = preferencesLoaded && isHidden(preference, now)
         return (
-          <article key={action.id} style={{ display: 'grid', gridTemplateColumns: '28px minmax(240px, 1fr) auto', gap: 10, padding: '13px 0', borderTop: index ? '1px solid var(--border)' : 'none', opacity: hidden ? 0.58 : 1 }}>
+          <article key={action.id} className="overview-action-row" style={{ borderTop: index ? '1px solid var(--border)' : 'none', opacity: hidden ? 0.58 : 1 }}>
             <span style={{ width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: index < 3 ? 'var(--red)' : 'var(--yellow)', background: index < 3 ? 'var(--red-light)' : 'var(--yellow-light)' }}>{actionIcon(action.kind)}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -281,6 +283,11 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
         )
       })}
 
+      {displayedActions.length > 3 && (
+        <button type="button" className="overview-view-actions" onClick={() => setShowAll(value => !value)}>
+          {showAll ? 'Show top 3' : `View all ${displayedActions.length} actions`}
+        </button>
+      )}
       <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-dim)' }}>Impact is an estimate, not a forecast. Advertising, refunds, and product-cost actions remain gated until their source data is verified.</div>
     </section>
   )
