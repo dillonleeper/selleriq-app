@@ -62,9 +62,17 @@
 .heroWarning .heroIcon { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
 .heroCritical .heroIcon { color: var(--red); background: var(--red-light); }
 
+.eyebrowRow {
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
 .eyebrow {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 0;
   color: var(--accent);
   font-size: 9px;
   font-weight: 720;
@@ -74,6 +82,17 @@
 
 .heroWarning .eyebrow { color: var(--yellow); }
 .heroCritical .eyebrow { color: var(--red); }
+
+.confidence {
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  font-size: 8px;
+  font-weight: 620;
+  letter-spacing: 0;
+}
 
 .hero h3 {
   margin: 0;
@@ -196,6 +215,17 @@
   color: var(--text-primary);
   font-size: 11px;
   font-weight: 610;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidenceMeta {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 8px;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
