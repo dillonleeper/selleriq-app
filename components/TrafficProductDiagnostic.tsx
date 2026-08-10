@@ -63,6 +63,7 @@ function diagnosticFor(product: Product, points: TrafficDiagnosticPoint[]) {
   const exactInventoryPoints = inventoryPoints.filter(point => point.inventory_age_days === 0)
   const outOfStockPoints = inventoryPoints.filter(point => number(point.available_quantity) <= 0)
   const observedSales = points.filter(point => point.sessions != null)
+  const overlappingInventoryPoints = observedSales.filter(point => point.inventory_market_count > 0 && point.available_quantity != null)
   const buyBoxHealthy = product.buy_box_pct != null && product.buy_box_pct >= 90
   const enoughTraffic = product.sessions >= 100
   const lowConversion = product.conv_rate < 5
@@ -87,7 +88,7 @@ function diagnosticFor(product: Product, points: TrafficDiagnosticPoint[]) {
       tone: 'warning' as const,
       label: 'Likely conversion-driven',
       title: 'Traffic is reaching the product, but too few sessions become orders.',
-      summary: `Observed inventory remained available and Buy Box averaged ${percent(product.buy_box_pct)}. Those signals do not support inventory or offer ownership as the primary explanation for the ${percent(product.conv_rate)} conversion rate.`,
+      summary: `Inventory remained available on ${overlappingInventoryPoints.length} observed overlap day${overlappingInventoryPoints.length === 1 ? '' : 's'}, while Buy Box averaged ${percent(product.buy_box_pct)}. Those signals do not support inventory or offer ownership as the primary explanation for the ${percent(product.conv_rate)} conversion rate.`,
       next: 'Investigate traffic quality, price competitiveness, ratings, and detail-page effectiveness. SellerIQ will narrow this further as those sources are connected.',
       inventoryCoverage,
       missingSalesDays,
@@ -166,6 +167,17 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
 
   const exactInventoryDays = points.length - missingInventoryDays
   const salesDays = points.length - diagnosis.missingSalesDays
+  const salesPoints = points.filter(point => point.sessions != null)
+  const overlapPoints = salesPoints.filter(point => point.inventory_market_count > 0 && point.available_quantity != null)
+  const exactOverlapDays = overlapPoints.filter(point => point.inventory_age_days === 0).length
+  const overlapRatio = salesPoints.length > 0 ? overlapPoints.length / salesPoints.length : 0
+  const confidence = overlapRatio >= 0.8 ? 'High confidence' : overlapRatio >= 0.5 ? 'Moderate confidence' : 'Limited confidence'
+  const latestSnapshotLabel = latestInventory?.inventory_snapshot_date
+    ? new Date(`${latestInventory.inventory_snapshot_date}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : null
+  const chartNote = metric === 'inventory'
+    ? 'Point-in-time snapshots; missing history does not change the latest value.'
+    : 'Blank dates are excluded from totals and averages—not treated as zero.'
   const evidenceLimit = [
     missingInventoryDays > 0 ? `${missingInventoryDays} day${missingInventoryDays === 1 ? '' : 's'} lack a same-day inventory snapshot.` : '',
     diagnosis.missingSalesDays > 0 ? `${diagnosis.missingSalesDays} day${diagnosis.missingSalesDays === 1 ? '' : 's'} lack sales and traffic data.` : '',
@@ -179,7 +191,10 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
           {diagnosis.tone === 'critical' ? <AlertTriangle size={17} /> : diagnosis.tone === 'warning' ? <Search size={17} /> : <Database size={17} />}
         </div>
         <div>
-          <span className={styles.eyebrow}>{diagnosis.label}</span>
+          <div className={styles.eyebrowRow}>
+            <span className={styles.eyebrow}>{diagnosis.label}</span>
+            <span className={styles.confidence}>{confidence}</span>
+          </div>
           <h3>{diagnosis.title}</h3>
           <p>{diagnosis.summary}</p>
         </div>
@@ -209,6 +224,7 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
           <div>
             <span className={styles.evidenceLabel}>Buy Box</span>
             <strong className={styles.evidenceValue}>{percent(product.buy_box_pct)} ownership</strong>
+            <small className={styles.evidenceMeta}>{salesDays} of {points.length} dates loaded</small>
           </div>
         </div>
         <div className={styles.evidenceItem}>
@@ -216,13 +232,17 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
           <div>
             <span className={styles.evidenceLabel}>Latest inventory</span>
             <strong className={styles.evidenceValue}>{latestInventory ? `${integer(latestInventory.available_quantity)} available` : 'No matching snapshot'}</strong>
+            <small className={styles.evidenceMeta}>{latestInventory
+              ? `${integer(latestInventory.fulfillable_quantity)} fulfillable · ${latestSnapshotLabel}`
+              : 'No snapshot date'}</small>
           </div>
         </div>
         <div className={styles.evidenceItem}>
           <span className={styles.evidenceIcon}><Database size={14} /></span>
           <div>
             <span className={styles.evidenceLabel}>Evidence coverage</span>
-            <strong className={styles.evidenceValue}>{salesDays} sales days · {exactInventoryDays} inventory days</strong>
+            <strong className={styles.evidenceValue}>{salesDays}/{points.length} sales dates loaded</strong>
+            <small className={styles.evidenceMeta}>{overlapPoints.length} overlap inventory · {exactOverlapDays} exact</small>
           </div>
         </div>
       </div>
@@ -264,7 +284,7 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
             <Area connectNulls={false} type="monotone" dataKey={meta.key} name={meta.label} stroke={meta.color} strokeWidth={2} fill={`url(#traffic-diagnostic-${metric})`} dot={{ r: 2.5, fill: meta.color }} activeDot={{ r: 4 }} />
           </AreaChart>
         </ResponsiveContainer>
-        <div className={styles.chartNote}>Missing dates remain gaps. Inventory snapshots can be carried forward up to two days and disclose their age.</div>
+        <div className={styles.chartNote}>{chartNote}</div>
       </section>
 
       <footer className={styles.footer}>
