@@ -460,3 +460,9 @@ table tbody td {
   .overview-filter-bar { align-items: stretch; }
   .overview-section-heading > span { display: none; }
 }
+
+@media (max-width: 760px) {
+  .overview-chart-grid { grid-template-columns: 1fr !important; }
+  .sales-overview-page .card[style*="padding: 24px"] { padding: 17px !important; }
+  .sales-overview-page .recharts-responsive-container { min-height: 220px; }
+}
