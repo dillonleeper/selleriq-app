@@ -715,12 +715,14 @@ export default function SalesOverview() {
             comparisonAvailable={comparisonComplete && prevData.length > 0}
             comparisonLabel={comparisonLabel}
             marketDrivers={marketDrivers}
-            inventoryRisks={inventoryRisks}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,
               units: totalUnits,
-              conversion: convRate,
-              asp,
+              sessions: totalSessions, priorSessions: prevSessions,
+              conversion: convRate, priorConversion: prevConvRate,
+              asp, priorAsp: prevAsp,
+              buyBox: Number(overviewSummary.buy_box_pct) || 0,
+              priorBuyBox: Number(overviewSummary.prior_buy_box_pct) || 0,
             }}
           />
 
