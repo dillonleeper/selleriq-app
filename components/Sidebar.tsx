@@ -2,9 +2,8 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useTheme } from '@/context/ThemeContext'
 import {
-  BarChart2, Package, Boxes, GitCompare, TrendingUp, Sun, Moon,
+  BarChart2, Package, Boxes, GitCompare, TrendingUp,
   LogOut, CircleDollarSign, PanelLeftClose, PanelLeftOpen, X
 } from 'lucide-react'
 
@@ -37,8 +36,6 @@ type Props = {
 
 export default function Sidebar({ collapsed, mobileOpen, onToggleCollapsed, onCloseMobile }: Props) {
   const pathname = usePathname()
-  const { theme, toggle } = useTheme()
-
   async function handleLogout() {
     try {
       await fetch('/api/logout', { method: 'POST' })
@@ -85,9 +82,6 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapsed, onCl
         <div className="sidebar-actions">
           <button type="button" className="sidebar-icon-button desktop-collapse-button" onClick={onToggleCollapsed} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
             {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-          </button>
-          <button type="button" className="sidebar-icon-button" onClick={toggle} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>
-            {theme === 'light' ? <Moon size={15} /> : <Sun size={15} />}
           </button>
           <button type="button" className="sidebar-icon-button sidebar-logout" onClick={handleLogout} title="Sign out">
             <LogOut size={15} />
