@@ -476,6 +476,7 @@ table tbody td {
 }
 .overview-briefing {
   position: relative;
+  margin-bottom: 26px;
   overflow: hidden;
   padding: clamp(28px, 4vw, 54px);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
