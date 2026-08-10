@@ -221,7 +221,7 @@ export default function SalesOverview() {
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [dailySeries, setDailySeries] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
-  const [chartBucket, setChartBucket] = useState<ChartBucket>('week')
+  const [chartBucket, setChartBucket] = useState<ChartBucket>('day')
   const [loading, setLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [retryToken, setRetryToken] = useState(0)
@@ -549,7 +549,7 @@ export default function SalesOverview() {
           </p>
         </div>
         <div className="overview-filter-bar">
-          <DateRangeFilter onChange={setDateRange} defaultPreset="ytd" />
+          <DateRangeFilter onChange={setDateRange} defaultPreset="last_7d" anchorDate={dataThrough} />
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             Compare
             <select value={comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 11 }}>
