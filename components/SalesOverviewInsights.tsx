@@ -40,7 +40,7 @@ export type InventoryRisk = {
   estimated_monthly_revenue: number | string
 }
 
-export type SalesOverviewInsightsProps = {
+type Props = {
   comparisonAvailable: boolean
   comparisonLabel: string
   skuDrivers: SkuDriver[]
@@ -77,7 +77,7 @@ const percent = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}%
 const relativeChange = (current: number, prior: number) => prior > 0 ? ((current - prior) / prior) * 100 : null
 const factorRevenue = (values: Record<FactorKey, number>) => values.traffic * values.conversion * values.asp
 
-function decomposeRevenue(metrics: SalesOverviewInsightsProps['metrics']): Factor[] {
+function decomposeRevenue(metrics: Props['metrics']): Factor[] {
   const prior: Record<FactorKey, number> = {
     traffic: metrics.priorSessions,
     conversion: metrics.priorConversion / 100,
@@ -115,8 +115,19 @@ function effectClause(factor: Factor) {
   return factor.effect >= 0 ? `added ${money(factor.effect)}` : `reduced revenue by ${money(Math.abs(factor.effect))}`
 }
 
-export function ExecutiveBriefing({ comparisonAvailable, comparisonLabel, marketDrivers, inventoryRisks, metrics }: SalesOverviewInsightsProps) {
-  const marketRevenue = marketDrivers.reduce((sum, row) => sum + n(row.revenue), 0)
+export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, inventoryRisks, inventoryError, metrics }: Props) {
+  const positives = skuDrivers.filter(row => n(row.revenue_delta) > 0).sort((a, b) => n(b.revenue_delta) - n(a.revenue_delta)).slice(0, 5)
+  const negatives = skuDrivers.filter(row => n(row.revenue_delta) < 0).sort((a, b) => n(a.revenue_delta) - n(b.revenue_delta)).slice(0, 5)
+  const revenueDelta = metrics.revenue - metrics.priorRevenue
+  const revenueChange = relativeChange(metrics.revenue, metrics.priorRevenue)
+  const marketCurrentRevenue = marketDrivers.reduce((sum, row) => sum + n(row.revenue), 0)
+  const factors = decomposeRevenue(metrics)
+  const rankedFactors = [...factors].sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
+  const strongestSku = revenueDelta < 0 ? negatives[0] : positives[0]
+  const explanation = comparisonAvailable && revenueChange !== null
+    ? `Revenue ${revenueDelta >= 0 ? 'increased' : 'decreased'} ${money(Math.abs(revenueDelta))} (${percent(revenueChange)}) versus ${comparisonLabel}. The largest modeled effect came from ${rankedFactors[0].label.toLowerCase()}, which ${effectClause(rankedFactors[0])}. ${rankedFactors[1].label} ${effectClause(rankedFactors[1])}. ${strongestSku ? `${strongestSku.sku} was the largest SKU ${revenueDelta >= 0 ? 'gain' : 'decline'} at ${signedMoney(n(strongestSku.revenue_delta))}.` : 'No single SKU materially drove the change.'}`
+    : `A complete ${comparisonLabel} is not available for this selection, so change attribution is intentionally withheld.`
+
   return (
     <div className="overview-story">
       <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
