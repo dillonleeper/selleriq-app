@@ -812,7 +812,7 @@ export default function SalesOverview() {
           </div>
 
           {/* Sessions + Conversion rate over time */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
+          <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
             <div className="card" style={{ padding: '24px' }}>
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Sessions over time</div>
