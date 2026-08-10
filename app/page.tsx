@@ -826,6 +826,12 @@ export default function SalesOverview() {
           </div>
 
           {/* Sessions + Conversion rate over time */}
+          <details className="overview-disclosure">
+            <summary>
+              <span><strong>Explore demand drivers</strong><small>Sessions and conversion trends</small></span>
+              <span className="overview-disclosure-action">View charts</span>
+            </summary>
+            <div className="overview-disclosure-body">
           <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
             <div className="card" style={{ padding: '24px' }}>
               <div style={{ marginBottom: '18px' }}>
@@ -873,8 +879,17 @@ export default function SalesOverview() {
               </ResponsiveContainer>
             </div>
           </div>
+            </div>
+          </details>
+
 
           {/* Settlement accounting is intentionally separated from ordered demand. */}
+          <details className="overview-disclosure overview-finance-disclosure">
+            <summary>
+              <span><strong>Financial reconciliation</strong><small>Account-level settlement activity and source validation</small></span>
+              <span className="overview-disclosure-action">View accounting</span>
+            </summary>
+            <div className="overview-disclosure-body">
           <div className="card" style={{ padding: '24px', borderLeft: '3px solid var(--yellow)' }}>
             <div style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Settlement activity (account-level)</div>
@@ -958,6 +973,8 @@ export default function SalesOverview() {
               </>
             )}
           </div>
+            </div>
+          </details>
         </>
       )}
     </div>
