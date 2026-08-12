@@ -1,9 +1,11 @@
 'use client'
 
-import { AlertTriangle, CheckCircle2, LoaderCircle, PackageSearch, TrendingDown, TrendingUp } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, LoaderCircle, PackageSearch, TrendingDown } from 'lucide-react'
 import type { TrafficDiagnosticPoint } from '@/components/TrafficProductDiagnostic'
+import ContextualAction from '@/components/ContextualAction'
 
 type Product = {
+  sku: string
   revenue: number
   units: number
   sessions: number
@@ -101,6 +103,10 @@ export default function ProductPerformanceDiagnostic({ product, points, loading 
 
   const Icon = tone === 'positive' ? CheckCircle2 : tone === 'critical' ? AlertTriangle : tone === 'warning' ? TrendingDown : PackageSearch
   const confidence = !hasComparison || points.length === 0 ? 'Low' : inventoryCoverage >= .7 ? 'High' : 'Medium'
+  const actionKind = label === 'Likely inventory-driven' ? 'stock' : label === 'Likely offer-driven' ? 'buybox' : label === 'Likely traffic-driven' ? 'traffic' : label === 'Likely conversion-driven' ? 'conversion' : 'revenue'
+  const actionHref = label === 'Likely inventory-driven'
+    ? `/inventory?sku=${encodeURIComponent(product.sku)}&tab=fba`
+    : `/traffic?sku=${encodeURIComponent(product.sku)}&expand=1`
   const revenueDirection = revenueDelta >= 0 ? 'increased' : 'fell'
   const trafficSentence = trafficEffect < 0
     ? `Fewer visits reduced modeled revenue by ${plainMoney(trafficEffect)}.`
@@ -153,6 +159,13 @@ export default function ProductPerformanceDiagnostic({ product, points, loading 
       <span><strong>{Math.round(inventoryCoverage * 100)}%</strong> inventory-date coverage</span>
     </div>
 
-    <div className="product-diagnostic-next"><TrendingUp size={14} /><span><strong>Next investigation:</strong> {next}</span></div>
+    <ContextualAction
+      id={`${actionKind}:${product.sku}`}
+      title={next}
+      reason={title}
+      evidence={[`${money(revenueDelta)} revenue change`, `${pct(sessionDeltaPct)} session movement`, `${product.buy_box_pct == null ? 'Unknown' : `${product.buy_box_pct.toFixed(1)}%`} Buy Box`, `${outOfStockDays} observed OOS days`]}
+      confidence={confidence}
+      href={actionHref}
+    />
   </section>
 }

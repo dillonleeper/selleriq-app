@@ -6,6 +6,7 @@ import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DashboardState from '@/components/DashboardState'
 import { useProductSelection } from '@/components/ProductSelectionContext'
+import ContextualAction from '@/components/ContextualAction'
 import forecastStyles from './InventoryForecastPanel.module.css'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
@@ -341,6 +342,7 @@ const ForecastTooltip = ({ active, payload, label, kind = 'demand' }: any) => {
 
 // ─── Forecast Panel ───────────────────────────────────────────
 function ForecastPanel({
+  sku,
   startInventory,
   avgDailyUnits,
   horizonDays,
@@ -352,6 +354,7 @@ function ForecastPanel({
   statsLeft,
   statsRight,
 }: {
+  sku: string
   startInventory: number
   avgDailyUnits: number
   horizonDays: number
@@ -423,6 +426,14 @@ function ForecastPanel({
           <strong>{needsOrder ? orderQuantity : 'On track'}</strong>
         </div>
       </section>
+
+      <ContextualAction
+        id={`supplier-reorder:${sku}`}
+        title={actionHeadline}
+        reason={actionSummary}
+        evidence={[`${fmt(startInventory)} units in inventory`, `${avgDailyUnits.toFixed(1)} units sold per day`, daysLeft == null ? 'Days left unavailable' : `${daysLeft} days left`, `Expected arrival ${arrivalLabel}`]}
+        confidence={salesHistory.length >= 7 ? 'High' : 'Medium'}
+      />
 
       <div className={forecastStyles.stats} aria-label="Inventory summary">
         <div className={forecastStyles.stat}>
@@ -1950,6 +1961,7 @@ export default function Inventory() {
                               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                 <td colSpan={9 + activeWarehouses.length} style={{ padding: 0, background: 'var(--accent-light)' }}>
                                   <ForecastPanel
+                                    sku={row.sku}
                                     startInventory={row.total_inventory}
                                     avgDailyUnits={row.avg_daily_units}
                                     horizonDays={supplierOrderTarget}

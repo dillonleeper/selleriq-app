@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Database, PackageCheck, Search, ShieldCheck } from 'lucide-react'
 import styles from './TrafficProductDiagnostic.module.css'
+import ContextualAction from '@/components/ContextualAction'
 import {
   Area,
   AreaChart,
@@ -287,14 +288,15 @@ export default function TrafficProductDiagnostic({ product, points, loading }: P
         <div className={styles.chartNote}>{chartNote}</div>
       </section>
 
-      <footer className={styles.footer}>
-        <span className={styles.footerLabel}>Next investigation</span>
-        <strong>{diagnosis.next}</strong>
-        <details className={styles.details}>
-          <summary>Evidence quality</summary>
-          <p>{evidenceLimit}</p>
-        </details>
-      </footer>
+      <ContextualAction
+        id={`${diagnosis.label.includes('inventory') ? 'stock' : diagnosis.label.includes('Buy Box') ? 'buybox' : diagnosis.label.includes('conversion') ? 'conversion' : 'traffic'}:${product.sku}`}
+        title={diagnosis.next}
+        reason={diagnosis.title}
+        evidence={[`${integer(product.sessions)} sessions`, `${percent(product.conv_rate)} conversion`, `${percent(product.buy_box_pct)} Buy Box`, latestInventory ? `${integer(latestInventory.available_quantity)} latest available` : 'No matching inventory snapshot', `${overlapPoints.length}/${salesPoints.length} sales dates overlap inventory`]}
+        confidence={confidence.replace(' confidence', '')}
+        href={diagnosis.label.includes('inventory') ? `/inventory?sku=${encodeURIComponent(product.sku)}&tab=fba` : undefined}
+      />
+      <details className={styles.details}><summary>Evidence quality</summary><p>{evidenceLimit}</p></details>
     </section>
   )
 }
