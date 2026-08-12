@@ -8,6 +8,7 @@ import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRang
 import SalesOverviewInsights, { InventoryRisk, MarketDriver, SkuDriver } from '@/components/SalesOverviewInsights'
 import ExecutiveBriefing from '@/components/ExecutiveBriefing'
 import SalesKpiHierarchy from '@/components/SalesKpiHierarchy'
+import { useProductSelection } from '@/components/ProductSelectionContext'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -261,7 +262,7 @@ export default function SalesOverview() {
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<any[]>([])
+  const { selectedProducts, setSelectedProducts } = useProductSelection()
   const [showDropdown, setShowDropdown] = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
 

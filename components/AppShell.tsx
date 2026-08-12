@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Menu } from 'lucide-react'
 import Sidebar from '@/components/Sidebar'
+import { ProductSelectionProvider } from '@/components/ProductSelectionContext'
 
 const STORAGE_KEY = 'selleriq-sidebar-collapsed'
 
@@ -23,6 +24,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
+    <ProductSelectionProvider>
     <div className={`app-shell ${collapsed ? 'sidebar-is-collapsed' : ''}`}>
       <button
         type="button"
@@ -51,5 +53,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <div className="app-content">{children}</div>
       </main>
     </div>
+    </ProductSelectionProvider>
   )
 }

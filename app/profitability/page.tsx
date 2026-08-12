@@ -12,6 +12,7 @@ import {
 import DateRangeFilter, { computeRange, type DateRange } from '@/components/DateRangeFilter'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DashboardState from '@/components/DashboardState'
+import { useProductSelection } from '@/components/ProductSelectionContext'
 import { supabase } from '@/lib/supabase'
 
 type ProfitabilityRow = {
@@ -120,6 +121,7 @@ function SummaryCard({ label, value, note, tone = 'default' }: {
 }
 
 export default function ProfitabilityPage() {
+  const { selectedProducts, setSelectedProducts } = useProductSelection()
   const [range, setRange] = useState<DateRange>(INITIAL_RANGE)
   const [markets, setMarkets] = useState<string[]>(['US'])
   const [rows, setRows] = useState<ProfitabilityRow[]>([])
@@ -192,15 +194,16 @@ export default function ProfitabilityPage() {
     const normalizedQuery = query.trim().toLowerCase()
     return rows.filter(row => {
       const hasActivity = n(row.transaction_count) > 0
+      const matchesWorkspaceSelection = selectedProducts.length === 0 || selectedProducts.some(product => product.sku === row.sku)
       const matchesQuery = !normalizedQuery || [row.sku, row.asin || '', row.title]
         .some(value => value.toLowerCase().includes(normalizedQuery))
       const matchesFilter = filter === 'all'
         || (filter === 'activity' && hasActivity)
         || (filter === 'no_activity' && !hasActivity)
         || (filter === 'negative' && hasActivity && n(row.net_proceeds_before_ads_ldp) < 0)
-      return matchesQuery && matchesFilter
+      return matchesWorkspaceSelection && matchesQuery && matchesFilter
     })
-  }, [rows, query, filter])
+  }, [rows, query, filter, selectedProducts])
 
   const visibleRows = filteredRows.slice(0, visibleCount)
   const filters: Array<{ value: RowFilter; label: string }> = [
@@ -319,6 +322,11 @@ export default function ProfitabilityPage() {
           </React.Fragment>)}
         </div>
       </div>}
+    </div>}
+
+    {selectedProducts.length > 0 && <div className="workspace-filter-notice">
+      <span><strong>{selectedProducts.length}</strong> product{selectedProducts.length === 1 ? '' : 's'} selected across SellerIQ</span>
+      <button type="button" onClick={() => setSelectedProducts([])}>Clear selection</button>
     </div>}
 
     <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap' }}>

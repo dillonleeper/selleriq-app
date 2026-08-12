@@ -6,6 +6,7 @@ import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import DashboardState from '@/components/DashboardState'
+import { useProductSelection } from '@/components/ProductSelectionContext'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line
@@ -146,14 +147,9 @@ export default function ProductPerformance() {
   // Search state — checkbox multi-select (same pattern as Sales Overview)
   const [searchQuery, setSearchQuery]       = useState('')
   const [searchResults, setSearchResults]   = useState<any[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<any[]>([])
+  const { selectedProducts, setSelectedProducts } = useProductSelection()
   const [showDropdown, setShowDropdown]     = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const sku = new URLSearchParams(window.location.search).get('sku')?.trim()
-    if (sku) setSelectedProducts([{ sku }])
-  }, [])
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {

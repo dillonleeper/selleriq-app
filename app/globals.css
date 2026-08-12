@@ -285,6 +285,28 @@ table tbody td {
 }
 .dashboard-state-button:hover { border-color: var(--accent); }
 .analytics-kpi-grid { min-width: 0; }
+.workspace-filter-notice {
+  margin-bottom: 10px;
+  padding: 8px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 9px;
+  color: var(--accent);
+  background: var(--accent-light);
+  font-size: 10px;
+}
+.workspace-filter-notice button {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
 
 @media (max-width: 1100px) {
   .analytics-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }

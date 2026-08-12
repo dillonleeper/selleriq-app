@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DashboardState from '@/components/DashboardState'
+import { useProductSelection } from '@/components/ProductSelectionContext'
 import forecastStyles from './InventoryForecastPanel.module.css'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
@@ -707,16 +708,14 @@ export default function Inventory() {
   // Search state — checkbox multi-select (same pattern as Sales Overview)
   const [searchQuery, setSearchQuery]       = useState('')
   const [searchResults, setSearchResults]   = useState<any[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<any[]>([])
+  const { selectedProducts, setSelectedProducts } = useProductSelection()
   const [showDropdown, setShowDropdown]     = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    const sku = params.get('sku')?.trim()
     const marketplace = params.get('market')
     const requestedTab = params.get('tab')
-    if (sku) setSelectedProducts([{ sku }])
     if (marketplace === 'US' || marketplace === 'CA') setMarkets([marketplace])
     if (requestedTab === 'inventory' || requestedTab === 'fba' || requestedTab === 'supplier') setTab(requestedTab)
   }, [])

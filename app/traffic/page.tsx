@@ -7,6 +7,7 @@ import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import TrafficProductDiagnostic, { type TrafficDiagnosticPoint } from '@/components/TrafficProductDiagnostic'
 import DashboardState from '@/components/DashboardState'
+import { useProductSelection } from '@/components/ProductSelectionContext'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line,
@@ -152,7 +153,7 @@ export default function TrafficConversion() {
   // Search state — checkbox multi-select (same pattern as Sales Overview)
   const [searchQuery, setSearchQuery]       = useState('')
   const [searchResults, setSearchResults]   = useState<any[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<any[]>([])
+  const { selectedProducts, setSelectedProducts } = useProductSelection()
   const [showDropdown, setShowDropdown]     = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
 
