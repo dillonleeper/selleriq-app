@@ -25,6 +25,7 @@ type Props = {
 
 const money = (value: number) => `${value < 0 ? '−' : value > 0 ? '+' : ''}$${Math.abs(Math.round(value)).toLocaleString('en-US')}`
 const pct = (value: number | null, digits = 1) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(digits)}%`
+const plainMoney = (value: number) => `$${Math.abs(Math.round(value)).toLocaleString('en-US')}`
 
 export default function ProductPerformanceDiagnostic({ product, points, loading }: Props) {
   if (loading) {
@@ -100,6 +101,31 @@ export default function ProductPerformanceDiagnostic({ product, points, loading 
 
   const Icon = tone === 'positive' ? CheckCircle2 : tone === 'critical' ? AlertTriangle : tone === 'warning' ? TrendingDown : PackageSearch
   const confidence = !hasComparison || points.length === 0 ? 'Low' : inventoryCoverage >= .7 ? 'High' : 'Medium'
+  const revenueDirection = revenueDelta >= 0 ? 'increased' : 'fell'
+  const trafficSentence = trafficEffect < 0
+    ? `Fewer visits reduced modeled revenue by ${plainMoney(trafficEffect)}.`
+    : `More visits added about ${plainMoney(trafficEffect)}.`
+  const conversionSentence = conversionEffect < 0
+    ? `Lower conversion reduced it by another ${plainMoney(conversionEffect)}.`
+    : revenueDelta < 0
+      ? `Better conversion recovered about ${plainMoney(conversionEffect)} of the loss.`
+      : `Better conversion added about ${plainMoney(conversionEffect)}.`
+  const priceSentence = priceEffect < 0
+    ? `A lower average selling price reduced it by about ${plainMoney(priceEffect)}.`
+    : `A higher average selling price added about ${plainMoney(priceEffect)}.`
+  let plainLanguage = hasComparison
+    ? `Revenue ${revenueDirection} ${plainMoney(revenueDelta)}. ${trafficSentence} ${conversionSentence} ${priceSentence}`
+    : 'SellerIQ can show the current result, but there is not enough prior-period data to explain what changed.'
+
+  if (revenueDelta < 0 && outOfStockDays > 0) {
+    plainLanguage = `Revenue fell ${plainMoney(revenueDelta)}, and SellerIQ observed ${outOfStockDays} day${outOfStockDays === 1 ? '' : 's'} without sellable inventory. The traffic and conversion effects may be consequences of that availability problem, so inventory should be investigated first.`
+  } else if (revenueDelta < 0 && buyBoxWeak) {
+    plainLanguage = `Revenue fell ${plainMoney(revenueDelta)} while this product owned the Buy Box only ${product.buy_box_pct?.toFixed(1)}% of the time. Shoppers may have seen another seller's offer, so price and offer ownership should be reviewed before changing the listing.`
+  } else if (hasComparison && revenueDelta < 0 && conversionEffect > 0 && priceEffect >= 0) {
+    plainLanguage += ' Stronger conversion and pricing softened the decline, but they did not fully offset the traffic loss.'
+  } else if (hasComparison && revenueDelta > 0 && (conversionEffect < 0 || priceEffect < 0 || trafficEffect < 0)) {
+    plainLanguage += ' The positive drivers more than offset the weaker part of performance.'
+  }
 
   return <section className={`product-diagnostic is-${tone}`}>
     <div className="product-diagnostic-summary">
@@ -109,6 +135,11 @@ export default function ProductPerformanceDiagnostic({ product, points, loading 
         <h3>{title}</h3>
         <p>{summary}</p>
       </div>
+    </div>
+
+    <div className="product-diagnostic-plain">
+      <span>Plain language</span>
+      <p>{plainLanguage}</p>
     </div>
 
     <div className="product-diagnostic-drivers">
