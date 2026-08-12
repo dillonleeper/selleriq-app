@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import React, { useEffect, useMemo, useState } from 'react'
 import {
@@ -12,6 +12,7 @@ import {
 import DateRangeFilter, { computeRange, type DateRange } from '@/components/DateRangeFilter'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DashboardState from '@/components/DashboardState'
+import LdpCostManager from '@/components/LdpCostManager'
 import { useProductSelection } from '@/components/ProductSelectionContext'
 import { supabase } from '@/lib/supabase'
 
@@ -256,7 +257,7 @@ export default function ProfitabilityPage() {
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, marginBottom: 18, flexWrap: 'wrap' }}>
       <div>
         <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>Profitability</h1>
-        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 12 }}>Traceable Amazon proceeds by SKU · all amounts normalized to USD</p>
+        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 12 }}>Traceable Amazon proceeds by SKU Â· all amounts normalized to USD</p>
       </div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
         <DateRangeFilter defaultPreset="last_90d" onChange={setRange} />
@@ -268,9 +269,11 @@ export default function ProfitabilityPage() {
       <Info size={16} style={{ color: 'var(--accent)', flex: '0 0 auto', marginTop: 1 }} />
       <div>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>This is not net profit yet</div>
-        <div style={{ marginTop: 3, fontSize: 10, lineHeight: 1.5, color: 'var(--text-muted)' }}>Net proceeds include sales, promotions, refunds, Amazon fees, shipping, and reimbursements. Product advertising and LDP are intentionally excluded until those sources are connected.</div>
+        <div style={{ marginTop: 3, fontSize: 10, lineHeight: 1.5, color: 'var(--text-muted)' }}>Net proceeds include sales, promotions, refunds, Amazon fees, shipping, and reimbursements. LDP is now available for covered products but is not subtracted here until shipment-cost reconciliation is activated. Product advertising remains unconnected.</div>
       </div>
     </div>
+
+    <LdpCostManager />
 
     <div className="analytics-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
       <SummaryCard label="Gross sales" value={formatMoney(accountGrossSales)} note="Amazon finance ledger" />
@@ -347,7 +350,7 @@ export default function ProfitabilityPage() {
     <div className="card" style={{ overflow: 'hidden' }}>
       {loading ? <DashboardState kind="loading" title="Reconciling Amazon finance data" detail="Assigning signed ledger components to products and account-level activity." />
       : error ? <DashboardState kind="error" title="Could not load profitability data" detail={error} />
-      : <div style={{ overflowX: 'hidden', maxHeight: '68vh', overflowY: 'auto' }}>
+      : <div style={{ overflowX: 'hidden' }}>
         <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
           <colgroup>
             <col style={{ width: '26%' }} /><col style={{ width: '5%' }} /><col style={{ width: '9%' }} />
@@ -362,14 +365,14 @@ export default function ProfitabilityPage() {
             const hasActivity = n(row.transaction_count) > 0
             return <React.Fragment key={key}>
               <tr onClick={() => void toggleRow(row, key)} style={{ cursor: 'pointer', background: expanded ? 'var(--accent-light)' : undefined }}>
-                <td><div style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` · ${row.asin}` : ''}</div></td>
+                <td><div style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` Â· ${row.asin}` : ''}</div></td>
                 <td style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>{row.marketplace}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : '—'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.promotions) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.promotions) : '—'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.refunds) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.refunds) : '—'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.amazon_fees) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.amazon_fees) : '—'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.shipping) : '—'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.reimbursements) : '—'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.promotions) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.promotions) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.refunds) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.refunds) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.amazon_fees) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.amazon_fees) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.shipping) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.reimbursements) : 'â€”'}</td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: n(row.net_proceeds_before_ads_ldp) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{hasActivity ? formatMoney(row.net_proceeds_before_ads_ldp) : 'No activity'}</td>
                 <td style={{ textAlign: 'center', color: 'var(--text-dim)' }}>{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</td>
               </tr>
@@ -377,7 +380,7 @@ export default function ProfitabilityPage() {
                 <div style={{ padding: '15px 18px', background: 'var(--bg-elevated)' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 18 }}>
                     <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Sales + promotions + refunds + Amazon fees + shipping + reimbursements = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong></div></div>
-                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` · latest ${row.last_transaction_date}` : ''}</div></div>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` Â· latest ${row.last_transaction_date}` : ''}</div></div>
                     <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Validation</div><div style={{ marginTop: 5, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {!row.asin && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Missing ASIN</span>}
                       {n(row.gross_sales) === 0 && hasActivity && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Activity without sales</span>}
@@ -392,7 +395,7 @@ export default function ProfitabilityPage() {
                       {transactionLoadingKey === key && <LoaderCircle className="cadence-loading-spinner" size={16} style={{ color: 'var(--accent)' }} />}
                     </div>
                     {transactionErrors[key] ? <div style={{ padding: 10, color: 'var(--red)', fontSize: 10 }}>{transactionErrors[key]}</div>
-                    : transactionLoadingKey === key ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>Loading transaction evidence…</div>
+                    : transactionLoadingKey === key ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>Loading transaction evidenceâ€¦</div>
                     : (transactionsByKey[key] || []).length === 0 ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>No source transactions found for this SKU and period.</div>
                     : <div style={{ overflowX: 'hidden', border: '1px solid var(--border)', borderRadius: 6 }}>
                       <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
@@ -401,7 +404,7 @@ export default function ProfitabilityPage() {
                         <tbody>{(transactionsByKey[key] || []).map(transaction => <tr key={transaction.transaction_id}>
                           <td style={{ whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.sale_date}</td>
                           <td><div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.order_id || 'No order ID'}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.description || transaction.transaction_id.slice(0, 16)}</div></td>
-                          <td><div style={{ fontSize: 9 }}>{transaction.transaction_type}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.transaction_status}{transaction.has_unmapped_component ? ' · unmapped component' : ''}</div></td>
+                          <td><div style={{ fontSize: 9 }}>{transaction.transaction_type}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.transaction_status}{transaction.has_unmapped_component ? ' Â· unmapped component' : ''}</div></td>
                           <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{formatMoney(transaction.gross_sales)}</td>
                           <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(transaction.refunds) < 0 ? 'var(--red)' : undefined }}>{formatMoney(transaction.refunds)}</td>
                           <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(transaction.amazon_fees) < 0 ? 'var(--red)' : undefined }}>{formatMoney(transaction.amazon_fees)}</td>
@@ -419,7 +422,8 @@ export default function ProfitabilityPage() {
       </div>}
     </div>
 
-    {!loading && visibleRows.length < filteredRows.length && <div style={{ textAlign: 'center', marginTop: 14 }}><button onClick={() => setVisibleCount(count => count + PAGE_SIZE)} style={{ padding: '8px 20px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>Load more · showing {visibleRows.length} of {filteredRows.length}</button></div>}
+    {!loading && visibleRows.length < filteredRows.length && <div style={{ textAlign: 'center', marginTop: 14 }}><button onClick={() => setVisibleCount(count => count + PAGE_SIZE)} style={{ padding: '8px 20px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>Load more Â· showing {visibleRows.length} of {filteredRows.length}</button></div>}
   </div>
 }
+
 
