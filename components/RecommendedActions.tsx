@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDownRight, Boxes, CheckCircle2, ChevronDown, Clock3, ExternalLink, Eye, EyeOff, LockKeyhole, RotateCcw, X } from 'lucide-react'
 import type { InventoryRisk, SkuDriver } from '@/components/SalesOverviewInsights'
+import styles from './RecommendedActions.module.css'
 
 type Props = {
   comparisonAvailable: boolean
@@ -267,7 +268,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
                 <span title="Modeled revenue currently exposed if the issue persists" style={{ fontSize: 9, fontWeight: 650, color: 'var(--red)', background: 'var(--red-light)', borderRadius: 999, padding: '2px 6px' }}>{money(action.impact)} impact</span>
                 <span title={action.confidence === 'High' ? 'Large supporting sample and directly observed signal' : 'Supported signal with a smaller sample or modeled assumption'} style={{ fontSize: 9, fontWeight: 650, color: action.confidence === 'High' ? 'var(--green)' : 'var(--yellow)', background: action.confidence === 'High' ? 'var(--green-light)' : 'var(--yellow-light)', borderRadius: 999, padding: '2px 6px' }}>{action.confidence} confidence</span>
                 {hidden && <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>{preference?.status === 'dismissed' ? 'Dismissed' : 'Snoozed'}</span>}
-                {reviewed && !hidden && <span className="action-reviewed-badge"><CheckCircle2 size={10} /> Reviewed</span>}
+                {reviewed && !hidden && <span className={styles.reviewedBadge}><CheckCircle2 size={10} /> Reviewed</span>}
               </div>
               <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.45 }}>{action.reason}</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -282,7 +283,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
                   <button type="button" aria-expanded={expanded} onClick={() => {
                     setExpandedActionId(current => current === action.id ? null : action.id)
                     if (!reviewed) updatePreference(action.id, { status: 'reviewed', updatedAt: Date.now() })
-                  }} className="action-review-button"><Eye size={11} /> {expanded ? 'Close review' : 'Review'} <ChevronDown size={10} className={expanded ? 'is-open' : ''} /></button>
+                  }} className={styles.reviewButton}><Eye size={11} /> {expanded ? 'Close review' : 'Review'} <ChevronDown size={10} className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`} /></button>
                   <button type="button" title={`Hide this action for ${SNOOZE_DAYS} days`} onClick={() => updatePreference(action.id, { status: 'snoozed', until: Date.now() + SNOOZE_DAYS * 86_400_000, updatedAt: Date.now() })} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><Clock3 size={11} /> Snooze 7d</button>
                   <button type="button" title="Hide this action until restored" onClick={() => updatePreference(action.id, { status: 'dismissed', updatedAt: Date.now() })} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><X size={11} /> Dismiss</button>
                 </>
@@ -290,23 +291,27 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
             </div>
           </article>
           {expanded && !hidden && (
-            <section className="action-review-panel" aria-label={`Review ${action.title}`}>
-              <div className="action-review-summary">
-                <span>SellerIQ conclusion</span>
-                <strong>{action.title}</strong>
-                <p>{action.reason}</p>
+            <section className={styles.panel} aria-label={`Review ${action.title}`}>
+              <div className={styles.topGrid}>
+                <div className={styles.summary}>
+                  <span className={styles.label}>SellerIQ conclusion</span>
+                  <strong>{action.title}</strong>
+                  <p>{action.reason}</p>
+                </div>
+                <div className={styles.evidence}>
+                  <span className={styles.label}>Supporting evidence</span>
+                  <ul>{action.evidence.map(item => <li key={item}><CheckCircle2 size={12} /> {item}</li>)}</ul>
+                </div>
               </div>
-              <div className="action-review-evidence">
-                <span>Supporting evidence</span>
-                <ul>{action.evidence.map(item => <li key={item}><CheckCircle2 size={12} /> {item}</li>)}</ul>
-              </div>
-              <div className="action-review-method">
-                <span>How to interpret this</span>
-                <p><strong>{money(action.impact)}</strong> is modeled revenue exposure, not guaranteed recovery. {action.confidence} confidence reflects the size and directness of the observed sample.</p>
-              </div>
-              <div className="action-review-controls">
-                <Link href={action.href} className="action-supporting-link">Open supporting page <ExternalLink size={11} /></Link>
-                <button type="button" disabled title="Approval becomes available only when SellerIQ has a verified write-capable integration for this action."><LockKeyhole size={11} /> Approval unavailable</button>
+              <div className={styles.footer}>
+                <div className={styles.method}>
+                  <span className={styles.label}>How to interpret this</span>
+                  <p><strong>{money(action.impact)}</strong> is modeled revenue exposure, not guaranteed recovery. {action.confidence} confidence reflects the size and directness of the observed sample.</p>
+                </div>
+                <div className={styles.controls}>
+                  <Link href={action.href} className={styles.supportingLink}>Open supporting page <ExternalLink size={11} /></Link>
+                  <button className={styles.approvalButton} type="button" disabled title="Approval becomes available only when SellerIQ has a verified write-capable integration for this action."><LockKeyhole size={11} /> Approval unavailable</button>
+                </div>
               </div>
             </section>
           )}
