@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
+import DashboardState from '@/components/DashboardState'
 import forecastStyles from './InventoryForecastPanel.module.css'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
@@ -684,6 +685,7 @@ export default function Inventory() {
   const [tab, setTab]                 = useState<TabType>('inventory')
   const [inventory, setInventory]     = useState<InventoryRow[]>([])
   const [loading, setLoading]         = useState(true)
+  const [loadError, setLoadError]     = useState<string | null>(null)
   const [sortKey, setSortKey]         = useState<SortKey>('avg_daily_units')
   const [sortDir, setSortDir]         = useState<SortDir>('desc')
   const [fbaSortKey, setFbaSortKey]   = useState<FbaSortKey>('units_to_send')
@@ -930,6 +932,7 @@ export default function Inventory() {
     let cancelled = false
     async function load() {
       setLoading(true)
+      setLoadError(null)
       try {
 
       const latestSnapshots = (await Promise.all(markets.map(async marketplace => {
@@ -958,7 +961,7 @@ export default function Inventory() {
           .limit(5000),
       ))
       const inventoryError = inventoryResults.find(result => result.error)?.error
-      if (inventoryError) { console.error(inventoryError); setLoading(false); return }
+      if (inventoryError) throw inventoryError
       const invData = inventoryResults.flatMap(result => result.data || [])
 
       const thirtyDaysAgo = new Date()
@@ -969,7 +972,7 @@ export default function Inventory() {
         'get_inventory_sales_velocity',
         { p_start: cutoff, p_markets: markets },
       )
-      if (velocityError) { console.error(velocityError); setLoading(false); return }
+      if (velocityError) throw velocityError
       if (cancelled) return
       const salesData = ((velocityData || []) as InventoryVelocityRpcRow[]).flatMap(row =>
         ((row.series as Array<{ d: string; units: number | string }>) || []).map(point => ({
@@ -1100,6 +1103,7 @@ export default function Inventory() {
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load inventory dashboard', error)
+          setLoadError(error instanceof Error ? error.message : 'Inventory data could not be loaded.')
           setInventory([])
           setSalesHistoryBySkuMarket({})
           setSalesHistoryBySkuOnly({})
@@ -1340,7 +1344,9 @@ export default function Inventory() {
       </div>
 
       {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
+        <DashboardState kind="loading" title="Loading inventory position" detail="Combining available, inbound, reserved, warehouse, and recent demand evidence." />
+      ) : loadError ? (
+        <DashboardState kind="error" title="Could not load inventory" detail={loadError} />
       ) : (
         <>
           {/* ── INVENTORY SNAPSHOT TAB ── */}

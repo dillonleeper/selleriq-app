@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
+import DashboardState from '@/components/DashboardState'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line
@@ -135,6 +136,7 @@ export default function ProductPerformance() {
   const [products, setProducts]         = useState<ProductRow[]>([])
   const [allPeriodData, setAllPeriodData] = useState<Record<string, DataPoint[]>>({})
   const [loading, setLoading]           = useState(true)
+  const [loadError, setLoadError]       = useState<string | null>(null)
   const [cadenceLoading, setCadenceLoading] = useState(false)
   const [expandedSku, setExpandedSku]   = useState<string | null>(null)
   const [sortKey, setSortKey]           = useState<SortKey>('revenue')
@@ -224,6 +226,7 @@ export default function ProductPerformance() {
     async function load() {
       const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
+      setLoadError(null)
       setExpandedSku(null)
       setAllPeriodData({})
       setCadenceLimit(50)
@@ -241,7 +244,7 @@ export default function ProductPerformance() {
         p_skus: selectedProducts.length ? selectedProducts.map(product => product.sku) : null,
       })
       if (cancelled) return
-      if (error) { console.error(error); setLoading(false); return }
+      if (error) { console.error(error); setLoadError(error.message || 'Product performance data could not be loaded.'); setLoading(false); return }
 
       const rows: ProductRow[] = []
 
@@ -641,7 +644,11 @@ export default function ProductPerformance() {
           Select a start date above to load data
         </div>
       ) : loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
+        <DashboardState kind="loading" title="Loading product performance" detail="Aggregating revenue, units, traffic, and offer metrics for the selected products." />
+      ) : loadError ? (
+        <DashboardState kind="error" title="Could not load product performance" detail={loadError} />
+      ) : products.length === 0 ? (
+        <DashboardState kind="empty" title="No product activity found" detail="Try a wider date range, another marketplace, or clear the selected-product filter." />
       ) : tab === 'summary' ? (
 
         /* ── SUMMARY TAB ── */

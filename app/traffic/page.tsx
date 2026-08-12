@@ -6,6 +6,7 @@ import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import TrafficProductDiagnostic, { type TrafficDiagnosticPoint } from '@/components/TrafficProductDiagnostic'
+import DashboardState from '@/components/DashboardState'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line,
@@ -139,6 +140,7 @@ export default function TrafficConversion() {
   const [products, setProducts] = useState<ProductRow[]>([])
   const [allWeeklyData, setAllWeeklyData] = useState<Record<string, WeeklyPoint[]>>({})
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [expandedSku, setExpandedSku] = useState<string | null>(null)
   const [diagnosticLoadingSku, setDiagnosticLoadingSku] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('sessions')
@@ -218,6 +220,7 @@ export default function TrafficConversion() {
     async function load() {
       const { startDate, endDate, priorStart, priorEnd } = dateRange!
       setLoading(true)
+      setLoadError(null)
       setExpandedSku(null)
       setPage(0)
 
@@ -232,7 +235,7 @@ export default function TrafficConversion() {
         p_skus: selectedProducts.length ? selectedProducts.map(product => product.sku) : null,
       })
       if (cancelled) return
-      if (error) { console.error(error); setLoading(false); return }
+      if (error) { console.error(error); setLoadError(error.message || 'Traffic and conversion data could not be loaded.'); setLoading(false); return }
 
       const rows: ProductRow[] = []
 
@@ -418,7 +421,7 @@ export default function TrafficConversion() {
       </div>
 
       {/* Summary tiles */}
-      <div style={{
+      <div className="analytics-kpi-grid" style={{
         display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px',
         marginBottom: '20px',
       }}>
@@ -600,7 +603,11 @@ export default function TrafficConversion() {
       </div>
 
       {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
+        <DashboardState kind="loading" title="Loading funnel diagnostics" detail="Cross-referencing sessions, conversion, Buy Box ownership, and inventory evidence." />
+      ) : loadError ? (
+        <DashboardState kind="error" title="Could not load funnel diagnostics" detail={loadError} />
+      ) : products.length === 0 ? (
+        <DashboardState kind="empty" title="No funnel activity found" detail="Try a wider date range, another marketplace, or clear the selected-product filter." />
       ) : (
         <>
           <div className="card" style={{ overflow: 'hidden' }}>

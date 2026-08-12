@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  AlertCircle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -12,6 +11,7 @@ import {
 } from 'lucide-react'
 import DateRangeFilter, { computeRange, type DateRange } from '@/components/DateRangeFilter'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
+import DashboardState from '@/components/DashboardState'
 import { supabase } from '@/lib/supabase'
 
 type ProfitabilityRow = {
@@ -269,7 +269,7 @@ export default function ProfitabilityPage() {
       </div>
     </div>
 
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
+    <div className="analytics-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
       <SummaryCard label="Gross sales" value={formatMoney(accountGrossSales)} note="Amazon finance ledger" />
       <SummaryCard label="Net proceeds" value={formatMoney(accountNetProceeds)} note="Before product ads and LDP" />
       <SummaryCard label="Advertising" value={formatMoney(accountAds)} note="Account total; SKU allocation pending" tone="warning" />
@@ -337,8 +337,8 @@ export default function ProfitabilityPage() {
     </div>
 
     <div className="card" style={{ overflow: 'hidden' }}>
-      {loading ? <div style={{ minHeight: 320, display: 'grid', placeItems: 'center' }}><div style={{ textAlign: 'center' }}><LoaderCircle className="cadence-loading-spinner" size={28} style={{ color: 'var(--accent)', margin: '0 auto 10px' }} /><div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Reconciling Amazon finance data</div><div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Assigning signed ledger components to SKUs…</div></div></div>
-      : error ? <div style={{ minHeight: 260, display: 'grid', placeItems: 'center', textAlign: 'center', padding: 24 }}><div><AlertCircle size={24} style={{ color: 'var(--red)', marginBottom: 8 }} /><div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Could not load profitability data</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)' }}>{error}</div></div></div>
+      {loading ? <DashboardState kind="loading" title="Reconciling Amazon finance data" detail="Assigning signed ledger components to products and account-level activity." />
+      : error ? <DashboardState kind="error" title="Could not load profitability data" detail={error} />
       : <div style={{ overflowX: 'hidden', maxHeight: '68vh', overflowY: 'auto' }}>
         <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
           <colgroup>
