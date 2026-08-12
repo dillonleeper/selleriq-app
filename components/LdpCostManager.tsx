@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, ChevronRight, Coins, LoaderCircle, Upload } from 'lucide-react'
+import { ChevronDown, ChevronRight, Coins, Download, LoaderCircle, Upload } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import styles from './LdpCostManager.module.css'
 
@@ -10,10 +10,12 @@ type Cost = {
   currency_code: string; source_system: string; source_reference: string | null; created_at: string
 }
 type Preview = { workbookRows: number; acceptedCount: number; rejectedCount: number }
+type Missing = { marketplace: string; sku: string; title: string }
 
 export default function LdpCostManager() {
   const [open, setOpen] = useState(false)
   const [costs, setCosts] = useState<Cost[]>([])
+  const [missing, setMissing] = useState<Missing[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [effectiveFrom, setEffectiveFrom] = useState('2026-01-01')
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -21,6 +23,8 @@ export default function LdpCostManager() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [view, setView] = useState<'all' | 'missing'>('all')
+  const [editing, setEditing] = useState<{ sku: string; marketplace: string; ldp: string; effectiveFrom: string } | null>(null)
 
   async function load() {
     setError('')
@@ -28,6 +32,7 @@ export default function LdpCostManager() {
     const body = await response.json()
     if (!response.ok) throw new Error(body.error || 'Could not load LDP records.')
     setCosts(body.costs || [])
+    setMissing(body.missing || [])
   }
 
   useEffect(() => { load().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load LDP records.')) }, [])
@@ -46,6 +51,7 @@ export default function LdpCostManager() {
         setMessage('Preview complete. Nothing has been written yet.')
       } else {
         setCosts(body.costs || [])
+        setMissing(body.missing || [])
         setPreview(null)
         setMessage(`Imported ${body.imported} validated LDP records. ${body.rejectedCount} rows remained rejected.`)
       }
@@ -54,14 +60,28 @@ export default function LdpCostManager() {
     } finally { setBusy(false) }
   }
 
+  async function saveManual() {
+    if (!editing) return
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const response = await fetch('/api/ldp', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editing) })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || 'Could not save LDP.')
+      setCosts(body.costs || []); setMissing(body.missing || []); setEditing(null)
+      setMessage('LDP saved. The effective-dated cost history has been preserved.')
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save LDP.') }
+    finally { setBusy(false) }
+  }
+
   const latest = useMemo(() => {
     const seen = new Set<string>()
     return costs.filter(item => { const key = `${item.marketplace}:${item.sku}`; if (seen.has(key)) return false; seen.add(key); return true })
   }, [costs])
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return latest.filter(item => !needle || `${item.sku} ${item.asin || ''} ${item.title} ${item.marketplace}`.toLowerCase().includes(needle))
-  }, [latest, query])
+    const source = view === 'all' ? latest : missing
+    return source.filter(item => !needle || `${item.sku} ${'asin' in item ? item.asin || '' : ''} ${item.title} ${item.marketplace}`.toLowerCase().includes(needle))
+  }, [latest, missing, query, view])
   const us = latest.filter(item => item.marketplace === 'US').length
   const ca = latest.filter(item => item.marketplace === 'CA').length
 
@@ -78,8 +98,9 @@ export default function LdpCostManager() {
       </span>
     </button>
     {open && <div className={styles.panel}>
+      <div className={styles.instructions}><span><strong style={{ color: 'var(--text-primary)' }}>Not sure what to upload?</strong> Download your SellerIQ catalog, fill in the <strong>Cost</strong> column in USD, then upload the completed file below. Existing costs are included and may be updated.</span><a className={styles.download} href="/api/ldp?template=1"><Download size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Download cost template</a></div>
       <div className={styles.upload}>
-        <div className={styles.field}><label>Excel cost workbook</label><input type="file" accept=".xlsx" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null); setMessage('') }} /></div>
+        <div className={styles.field}><label>Completed cost file</label><input type="file" accept=".xlsx,.csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null); setMessage('') }} /></div>
         <div className={styles.field}><label>Effective from</label><input type="date" value={effectiveFrom} onChange={event => setEffectiveFrom(event.target.value)} /></div>
         <div className={styles.buttons}>
           <button className={styles.button} type="button" disabled={busy || !file} onClick={() => submit('preview')}>{busy ? <LoaderCircle size={13} /> : 'Preview'}</button>
@@ -92,8 +113,13 @@ export default function LdpCostManager() {
         <div className={styles.previewCard}><div className={styles.previewValue} style={{ color: 'var(--amber)' }}>{preview.rejectedCount}</div><div className={styles.previewLabel}>Rejected and left untouched</div></div>
       </div>}
       {(message || error) && <div className={`${styles.message} ${error ? styles.error : ''}`}>{error || message}</div>}
-      <div className={styles.toolbar}><div><div className={styles.title}>Current LDP records</div><div className={styles.subtitle}>Latest effective record per SKU and marketplace</div></div><input className={styles.search} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search SKU, ASIN, product, or market" /></div>
-      <div className={styles.tableWrap}>{filtered.length ? <table className={styles.table}><thead><tr><th>Product</th><th>Market</th><th>LDP / unit</th><th>Effective</th><th>Source</th></tr></thead><tbody>{filtered.map(item => <tr key={item.id}><td><strong>{item.title}</strong><div className={styles.subtitle}><span className={styles.mono}>{item.sku}</span>{item.asin ? ` · ${item.asin}` : ''}</div></td><td>{item.marketplace}</td><td className={styles.mono}>${Number(item.ldp_per_unit).toFixed(2)} USD</td><td className={styles.mono}>{item.effective_from}</td><td>{item.source_reference || item.source_system}<div className={styles.subtitle}>{item.source_system}</div></td></tr>)}</tbody></table> : <div className={styles.empty}>No LDP records match this search.</div>}</div>
+      <div className={styles.toolbar}><div><div className={styles.title}>Current LDP records</div><div className={styles.subtitle}>Latest effective record per SKU and marketplace</div></div><div className={styles.tabs}><button className={`${styles.tab} ${view === 'all' ? styles.activeTab : ''}`} onClick={() => setView('all')}>All costs ({latest.length})</button><button className={`${styles.tab} ${view === 'missing' ? styles.activeTab : ''}`} onClick={() => setView('missing')}>Missing costs ({missing.length})</button></div><input className={styles.search} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search SKU, ASIN, product, or market" /></div>
+      <div className={styles.tableWrap}>{filtered.length ? <table className={styles.table}><thead><tr><th>Product</th><th>Market</th><th>LDP / unit</th><th>Effective</th><th>Source</th><th /></tr></thead><tbody>{filtered.map(item => {
+        const key = `${item.marketplace}:${item.sku}`
+        const isEditing = editing?.sku === item.sku && editing.marketplace === item.marketplace
+        const cost = 'ldp_per_unit' in item ? item as Cost : null
+        return <tr key={key}><td><strong>{item.title}</strong><div className={styles.subtitle}><span className={styles.mono}>{item.sku}</span>{cost?.asin ? ` · ${cost.asin}` : ''}</div></td><td>{item.marketplace}</td><td>{isEditing ? <input className={styles.editInput} value={editing.ldp} onChange={event => setEditing({ ...editing, ldp: event.target.value })} placeholder="0.00" /> : cost ? <span className={styles.mono}>${Number(cost.ldp_per_unit).toFixed(2)} USD</span> : <span style={{ color: 'var(--amber)' }}>Missing</span>}</td><td>{isEditing ? <input className={styles.editInput} type="date" value={editing.effectiveFrom} onChange={event => setEditing({ ...editing, effectiveFrom: event.target.value })} /> : <span className={styles.mono}>{cost?.effective_from || '—'}</span>}</td><td>{cost ? <>{cost.source_reference || cost.source_system}<div className={styles.subtitle}>{cost.source_system}</div></> : 'No effective-dated cost'}</td><td><div className={styles.rowActions}>{isEditing ? <><button className={styles.button} disabled={busy} onClick={saveManual}>Save</button><button className={styles.tab} onClick={() => setEditing(null)}>Cancel</button></> : <button className={styles.tab} onClick={() => setEditing({ sku: item.sku, marketplace: item.marketplace, ldp: cost ? String(cost.ldp_per_unit) : '', effectiveFrom: cost?.effective_from || effectiveFrom })}>{cost ? 'Update' : 'Add cost'}</button>}</div></td></tr>
+      })}</tbody></table> : <div className={styles.empty}>{view === 'missing' ? 'Every catalog SKU-market record has an LDP.' : 'No LDP records match this search.'}</div>}</div>
     </div>}
   </section>
 }

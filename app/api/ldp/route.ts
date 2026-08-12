@@ -29,9 +29,11 @@ function numberValue(value: unknown): number | null {
 }
 
 async function parseWorkbook(file: File) {
-  if (!file.name.toLowerCase().endsWith('.xlsx')) throw new Error('Upload an .xlsx workbook.')
+  const extension = file.name.toLowerCase()
+  if (!extension.endsWith('.xlsx') && !extension.endsWith('.csv')) throw new Error('Upload an .xlsx or .csv cost file.')
   if (file.size > MAX_FILE_BYTES) throw new Error('The workbook is larger than 10 MB.')
-  const rows = readXlsxTable(Buffer.from(await file.arrayBuffer()))
+  const contents = Buffer.from(await file.arrayBuffer())
+  const rows = extension.endsWith('.csv') ? readCsv(contents.toString('utf8').replace(/^\uFEFF/, '')) : readXlsxTable(contents)
   if (!rows.length) throw new Error('The workbook does not contain a worksheet.')
   const headers = new Map<string, number>()
   rows[0].forEach((value, column) => headers.set(clean(value).toLowerCase(), column))
@@ -54,6 +56,54 @@ async function parseWorkbook(file: File) {
     parsed.push({ row: index + 1, sku, asin, marketplace, ldp })
   }
   return parsed
+}
+
+function readCsv(text: string) {
+  const rows: string[][] = []
+  let row: string[] = []; let value = ''; let quoted = false
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (quoted && char === '"' && text[index + 1] === '"') { value += '"'; index += 1 }
+    else if (char === '"') quoted = !quoted
+    else if (!quoted && char === ',') { row.push(value); value = '' }
+    else if (!quoted && (char === '\n' || char === '\r')) {
+      if (char === '\r' && text[index + 1] === '\n') index += 1
+      row.push(value); if (row.some(cell => cell.length)) rows.push(row); row = []; value = ''
+    } else value += char
+  }
+  row.push(value); if (row.some(cell => cell.length)) rows.push(row)
+  return rows
+}
+
+function csvCell(value: unknown) {
+  return `"${String(value ?? '').replaceAll('"', '""')}"`
+}
+
+async function costTemplate() {
+  const admin = createSupabaseAdmin()
+  const [{ data: products, error: productError }, { data: costs, error: costError }] = await Promise.all([
+    admin.from('dim_product').select('marketplace,sku,asin,title').order('marketplace').order('sku'),
+    admin.from('sku_ldp_history').select('marketplace,sku,effective_from,ldp_per_unit').order('effective_from', { ascending: false }),
+  ])
+  if (productError) throw new Error(productError.message)
+  if (costError) throw new Error(costError.message)
+  const latest = new Map<string, { ldp_per_unit: unknown; effective_from: string }>()
+  for (const item of costs || []) {
+    const key = `${item.marketplace}:${String(item.sku).trim()}`
+    if (!latest.has(key)) latest.set(key, item)
+  }
+  const header = ['Marketplace', 'SKU', 'ASIN', 'Title', 'Cost', 'CurrentEffectiveDate']
+  const lines = [header.map(csvCell).join(',')]
+  for (const product of products || []) {
+    if (!product.sku) continue
+    const cost = latest.get(`${product.marketplace}:${String(product.sku).trim()}`)
+    lines.push([
+      product.marketplace === 'CA' ? 'Amazon.ca' : 'Amazon.com',
+      String(product.sku).trim(), product.asin || '', product.title || '',
+      cost?.ldp_per_unit ?? '', cost?.effective_from ?? '',
+    ].map(csvCell).join(','))
+  }
+  return `\uFEFF${lines.join('\r\n')}`
 }
 
 async function validate(file: File) {
@@ -94,13 +144,26 @@ async function currentCosts() {
   if (costError) throw new Error(costError.message)
   if (productError) throw new Error(productError.message)
   const titles = new Map((products || []).map(item => [`${item.marketplace}:${String(item.sku).trim()}`, item.title]))
-  return (costs || []).map(item => ({ ...item, title: titles.get(`${item.marketplace}:${String(item.sku).trim()}`) || item.sku }))
+  const rows = (costs || []).map(item => ({ ...item, title: titles.get(`${item.marketplace}:${String(item.sku).trim()}`) || item.sku }))
+  const covered = new Set(rows.map(item => `${item.marketplace}:${String(item.sku).trim()}`))
+  const missing = (products || [])
+    .filter(item => item.sku && !covered.has(`${item.marketplace}:${String(item.sku).trim()}`))
+    .map(item => ({ marketplace: item.marketplace, sku: String(item.sku).trim(), title: item.title || item.sku }))
+  return { rows, missing }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   if (!await hasValidAppSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   try {
-    return NextResponse.json({ costs: await currentCosts() }, { headers: { 'Cache-Control': 'no-store' } })
+    if (new URL(request.url).searchParams.get('template') === '1') {
+      return new Response(await costTemplate(), { headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="selleriq-ldp-cost-template.csv"',
+        'Cache-Control': 'no-store',
+      } })
+    }
+    const result = await currentCosts()
+    return NextResponse.json({ costs: result.rows, missing: result.missing }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Could not load LDP records.' }, { status: 500 })
   }
@@ -145,8 +208,45 @@ export async function POST(request: Request) {
       const { error } = await admin.from('sku_ldp_history').upsert(payload.slice(index, index + 250), { onConflict: 'marketplace,sku,effective_from' })
       if (error) throw new Error(`Import failed: ${error.message}`)
     }
-    return NextResponse.json({ imported: payload.length, rejectedCount: result.rejected.length, costs: await currentCosts() })
+    const refreshed = await currentCosts()
+    return NextResponse.json({ imported: payload.length, rejectedCount: result.rejected.length, costs: refreshed.rows, missing: refreshed.missing })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'The LDP import failed.' }, { status: 500 })
+  }
+}
+
+export async function PUT(request: Request) {
+  if (!await hasValidAppSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isSameOrigin(request)) return NextResponse.json({ error: 'Invalid request origin.' }, { status: 403 })
+  try {
+    const body = await request.json()
+    const sku = clean(body.sku)
+    const marketplace = market(body.marketplace)
+    const effectiveFrom = clean(body.effectiveFrom)
+    const ldp = numberValue(body.ldp)
+    if (!sku || !marketplace || ldp === null || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
+      return NextResponse.json({ error: 'SKU, marketplace, non-negative LDP, and effective date are required.' }, { status: 400 })
+    }
+    const admin = createSupabaseAdmin()
+    const { data: product, error: productError } = await admin.from('dim_product')
+      .select('sku,marketplace,asin').eq('sku', sku).eq('marketplace', marketplace).maybeSingle()
+    if (productError) throw new Error(productError.message)
+    if (!product) return NextResponse.json({ error: 'This SKU and marketplace do not exist in SellerIQ.' }, { status: 400 })
+    const { error } = await admin.from('sku_ldp_history').upsert({
+      marketplace,
+      sku,
+      asin: product.asin,
+      effective_from: effectiveFrom,
+      effective_to: null,
+      ldp_per_unit: ldp,
+      currency_code: 'USD',
+      source_system: 'selleriq_manual_ldp',
+      source_reference: 'Manual edit in SellerIQ',
+    }, { onConflict: 'marketplace,sku,effective_from' })
+    if (error) throw new Error(error.message)
+    const refreshed = await currentCosts()
+    return NextResponse.json({ costs: refreshed.rows, missing: refreshed.missing })
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Could not save LDP.' }, { status: 500 })
   }
 }

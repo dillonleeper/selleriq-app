@@ -10,6 +10,8 @@
 .metricLabel { margin-top: 4px; font-size: 9px; color: var(--text-dim); }
 .panel { border-top: 1px solid var(--border); padding: 16px; background: var(--bg-page); }
 .upload { display: grid; grid-template-columns: minmax(220px, 1fr) 150px auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
+.instructions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 11px 13px; border-radius: 8px; background: var(--accent-light); color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.download { white-space: nowrap; color: var(--accent); font-weight: 700; text-decoration: none; }
 .field label { display: block; margin-bottom: 6px; font-size: 9px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
 .field input { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-card); color: var(--text-primary); font-size: 11px; }
 .buttons { display: flex; gap: 7px; }
@@ -23,6 +25,11 @@
 .previewValue { font: 700 17px/1 JetBrains Mono, monospace; }
 .previewLabel { margin-top: 5px; font-size: 9px; color: var(--text-muted); }
 .toolbar { display: flex; justify-content: space-between; gap: 10px; margin-top: 16px; align-items: center; flex-wrap: wrap; }
+.tabs { display: flex; gap: 5px; }
+.tab { padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 10px; font-weight: 700; cursor: pointer; }
+.activeTab { border-color: var(--accent-border); background: var(--accent-light); color: var(--accent); }
+.editInput { width: 90px; padding: 6px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font: 10px JetBrains Mono, monospace; }
+.rowActions { display: flex; gap: 5px; justify-content: flex-end; }
 .search { width: min(420px, 100%); min-height: 36px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-card); color: var(--text-primary); }
 .tableWrap { margin-top: 10px; overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-card); }
 .table { width: 100%; border-collapse: collapse; min-width: 850px; }
