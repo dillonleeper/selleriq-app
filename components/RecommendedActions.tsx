@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowDownRight, Boxes, Clock3, ExternalLink, EyeOff, RotateCcw, X } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, ArrowDownRight, Boxes, CheckCircle2, ChevronDown, Clock3, ExternalLink, Eye, EyeOff, LockKeyhole, RotateCcw, X } from 'lucide-react'
 import type { InventoryRisk, SkuDriver } from '@/components/SalesOverviewInsights'
 
 type Props = {
@@ -14,7 +14,7 @@ type Props = {
 
 type ActionKind = 'revenue' | 'traffic' | 'conversion' | 'buybox' | 'stock'
 type Confidence = 'High' | 'Medium'
-type ActionPreference = { status: 'dismissed' | 'snoozed'; until?: number; updatedAt: number }
+type ActionPreference = { status: 'reviewed' | 'dismissed' | 'snoozed'; until?: number; updatedAt: number }
 type PreferenceStore = { version: 1; items: Record<string, ActionPreference> }
 type ActionItem = {
   id: string
@@ -71,6 +71,7 @@ function writePreferences(items: Record<string, ActionPreference>) {
 
 function isHidden(preference: ActionPreference | undefined, now: number) {
   if (!preference) return false
+  if (preference.status === 'reviewed') return false
   if (preference.status === 'dismissed') return true
   return Boolean(preference.until && preference.until > now)
 }
@@ -200,6 +201,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
   const [preferencesLoaded, setPreferencesLoaded] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
   const [showAll, setShowAll] = useState(false)
+  const [expandedActionId, setExpandedActionId] = useState<string | null>(null)
   const [now, setNow] = useState(0)
 
   useEffect(() => {
@@ -253,8 +255,11 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
       ) : visibleActions.map((action, index) => {
         const preference = preferences[action.id]
         const hidden = preferencesLoaded && isHidden(preference, now)
+        const reviewed = preference?.status === 'reviewed'
+        const expanded = expandedActionId === action.id
         return (
-          <article key={action.id} className="overview-action-row" style={{ borderTop: index ? '1px solid var(--border)' : 'none', opacity: hidden ? 0.58 : 1 }}>
+          <Fragment key={action.id}>
+          <article className="overview-action-row" style={{ borderTop: index ? '1px solid var(--border)' : 'none', opacity: hidden ? 0.58 : 1 }}>
             <span style={{ width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: index < 3 ? 'var(--red)' : 'var(--yellow)', background: index < 3 ? 'var(--red-light)' : 'var(--yellow-light)' }}>{actionIcon(action.kind)}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -262,6 +267,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
                 <span title="Modeled revenue currently exposed if the issue persists" style={{ fontSize: 9, fontWeight: 650, color: 'var(--red)', background: 'var(--red-light)', borderRadius: 999, padding: '2px 6px' }}>{money(action.impact)} impact</span>
                 <span title={action.confidence === 'High' ? 'Large supporting sample and directly observed signal' : 'Supported signal with a smaller sample or modeled assumption'} style={{ fontSize: 9, fontWeight: 650, color: action.confidence === 'High' ? 'var(--green)' : 'var(--yellow)', background: action.confidence === 'High' ? 'var(--green-light)' : 'var(--yellow-light)', borderRadius: 999, padding: '2px 6px' }}>{action.confidence} confidence</span>
                 {hidden && <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>{preference?.status === 'dismissed' ? 'Dismissed' : 'Snoozed'}</span>}
+                {reviewed && !hidden && <span className="action-reviewed-badge"><CheckCircle2 size={10} /> Reviewed</span>}
               </div>
               <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.45 }}>{action.reason}</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -273,13 +279,38 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
                 <button type="button" onClick={() => updatePreference(action.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><RotateCcw size={11} /> Restore</button>
               ) : (
                 <>
-                  <Link href={action.href} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none', border: '1px solid var(--accent-border)', background: 'var(--accent-light)', color: 'var(--accent)', borderRadius: 6, padding: '5px 7px', fontSize: 10, fontWeight: 600 }}>Open SKU <ExternalLink size={10} /></Link>
+                  <button type="button" aria-expanded={expanded} onClick={() => {
+                    setExpandedActionId(current => current === action.id ? null : action.id)
+                    if (!reviewed) updatePreference(action.id, { status: 'reviewed', updatedAt: Date.now() })
+                  }} className="action-review-button"><Eye size={11} /> {expanded ? 'Close review' : 'Review'} <ChevronDown size={10} className={expanded ? 'is-open' : ''} /></button>
                   <button type="button" title={`Hide this action for ${SNOOZE_DAYS} days`} onClick={() => updatePreference(action.id, { status: 'snoozed', until: Date.now() + SNOOZE_DAYS * 86_400_000, updatedAt: Date.now() })} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><Clock3 size={11} /> Snooze 7d</button>
                   <button type="button" title="Hide this action until restored" onClick={() => updatePreference(action.id, { status: 'dismissed', updatedAt: Date.now() })} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><X size={11} /> Dismiss</button>
                 </>
               )}
             </div>
           </article>
+          {expanded && !hidden && (
+            <section className="action-review-panel" aria-label={`Review ${action.title}`}>
+              <div className="action-review-summary">
+                <span>SellerIQ conclusion</span>
+                <strong>{action.title}</strong>
+                <p>{action.reason}</p>
+              </div>
+              <div className="action-review-evidence">
+                <span>Supporting evidence</span>
+                <ul>{action.evidence.map(item => <li key={item}><CheckCircle2 size={12} /> {item}</li>)}</ul>
+              </div>
+              <div className="action-review-method">
+                <span>How to interpret this</span>
+                <p><strong>{money(action.impact)}</strong> is modeled revenue exposure, not guaranteed recovery. {action.confidence} confidence reflects the size and directness of the observed sample.</p>
+              </div>
+              <div className="action-review-controls">
+                <Link href={action.href} className="action-supporting-link">Open supporting page <ExternalLink size={11} /></Link>
+                <button type="button" disabled title="Approval becomes available only when SellerIQ has a verified write-capable integration for this action."><LockKeyhole size={11} /> Approval unavailable</button>
+              </div>
+            </section>
+          )}
+          </Fragment>
         )
       })}
 
