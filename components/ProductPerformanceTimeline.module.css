@@ -1,0 +1,11 @@
+.card { margin: 14px 0 16px; padding: 16px 16px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-card); }
+.header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
+.header h4 { margin: 0 0 3px; font-size: 13px; color: var(--text-primary); }
+.header p, .note { margin: 0; color: var(--text-dim); font-size: 11px; }
+.tabs { display: flex; padding: 3px; border-radius: 10px; background: var(--bg-secondary); overflow-x: auto; }
+.tabs button { border: 0; border-radius: 8px; padding: 7px 10px; background: transparent; color: var(--text-muted); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.tabs button.active { background: var(--bg-card); color: var(--accent); box-shadow: 0 1px 4px rgba(15, 23, 42, .08); }
+.chart { height: 190px; }
+.empty { height: 150px; display: grid; place-items: center; color: var(--text-dim); font-size: 12px; }
+.note { margin-top: 6px; }
+@media (max-width: 760px) { .header { flex-direction: column; } .tabs { width: 100%; } .chart { height: 170px; } }

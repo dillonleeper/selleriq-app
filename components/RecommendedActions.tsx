@@ -38,7 +38,8 @@ const EMPTY_PREFERENCES: Record<string, ActionPreference> = {}
 const n = (value: number | string | null | undefined) => Number(value) || 0
 const money = (value: number) => `$${Math.abs(value).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
 const signedPercent = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
-const productHref = (sku: string) => `/products?sku=${encodeURIComponent(sku)}`
+const productHref = (sku: string) => `/products?sku=${encodeURIComponent(sku)}&expand=1`
+const trafficHref = (sku: string) => `/traffic?sku=${encodeURIComponent(sku)}&expand=1`
 const inventoryHref = (sku: string, marketplace: string) => `/inventory?sku=${encodeURIComponent(sku)}&market=${encodeURIComponent(marketplace)}&tab=fba`
 
 function confidenceFor(sample: number, highThreshold: number): Confidence {
@@ -125,7 +126,7 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
           impact,
           score: impact * confidenceWeight(confidence),
           confidence,
-          href: productHref(row.sku),
+          href: trafficHref(row.sku),
         })
       }
 
@@ -141,7 +142,7 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
           impact,
           score: impact * confidenceWeight(confidence),
           confidence,
-          href: productHref(row.sku),
+          href: trafficHref(row.sku),
         })
       }
 
@@ -157,7 +158,7 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
           impact,
           score: impact * confidenceWeight(confidence),
           confidence,
-          href: productHref(row.sku),
+          href: trafficHref(row.sku),
         })
       }
     }

@@ -8,6 +8,7 @@ import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRang
 import DashboardState from '@/components/DashboardState'
 import { useProductSelection } from '@/components/ProductSelectionContext'
 import ProductPerformanceDiagnostic from '@/components/ProductPerformanceDiagnostic'
+import ProductPerformanceTimeline from '@/components/ProductPerformanceTimeline'
 import type { TrafficDiagnosticPoint } from '@/components/TrafficProductDiagnostic'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -280,6 +281,11 @@ export default function ProductPerformance() {
       }
 
       setProducts(rows)
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        const requestedSku = params.get('expand') === '1' ? params.get('sku') : null
+        if (requestedSku && rows.some(row => row.sku === requestedSku)) setExpandedSku(requestedSku)
+      }
       setLoading(false)
     }
     load()
@@ -796,6 +802,11 @@ export default function ProductPerformance() {
                                   points={diagnosticData[p.sku] || []}
                                   loading={diagnosticLoadingSku === p.sku || diagnosticData[p.sku] === undefined}
                                 />
+                                <ProductPerformanceTimeline
+                                  revenuePoints={allPeriodData[p.sku] || []}
+                                  diagnosticPoints={diagnosticData[p.sku] || []}
+                                  loading={diagnosticLoadingSku === p.sku || diagnosticData[p.sku] === undefined}
+                                />
                                 <div style={{ display: 'flex', gap: '28px', marginBottom: '16px', flexWrap: 'wrap' }}>
                                   {[
                                     { label: 'Revenue',   value: fmtCurrency(p.revenue) },
@@ -812,21 +823,6 @@ export default function ProductPerformance() {
                                     </div>
                                   ))}
                                 </div>
-                                <ResponsiveContainer width="100%" height={160}>
-                                  <AreaChart data={allPeriodData[p.sku] || []}>
-                                    <defs>
-                                      <linearGradient id={`grad-${sanitizeId(p.sku)}`} x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%"  stopColor="var(--chart-primary)" stopOpacity={1} />
-                                        <stop offset="95%" stopColor="var(--chart-primary)" stopOpacity={0} />
-                                      </linearGradient>
-                                    </defs>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                                    <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={55} />
-                                    <Tooltip content={<CustomTooltip />} />
-                                    <Area type="monotone" dataKey="revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill={`url(#grad-${sanitizeId(p.sku)})`} dot={false} />
-                                  </AreaChart>
-                                </ResponsiveContainer>
                               </div>
                             </td>
                           </tr>

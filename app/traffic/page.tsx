@@ -266,6 +266,11 @@ export default function TrafficConversion() {
       }
 
       setProducts(rows)
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        const requestedSku = params.get('expand') === '1' ? params.get('sku') : null
+        if (requestedSku && rows.some(row => row.sku === requestedSku)) setExpandedSku(requestedSku)
+      }
       setAllWeeklyData({})
       setLoading(false)
     }
