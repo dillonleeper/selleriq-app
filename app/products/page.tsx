@@ -7,6 +7,8 @@ import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import DashboardState from '@/components/DashboardState'
 import { useProductSelection } from '@/components/ProductSelectionContext'
+import ProductPerformanceDiagnostic from '@/components/ProductPerformanceDiagnostic'
+import type { TrafficDiagnosticPoint } from '@/components/TrafficProductDiagnostic'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line
@@ -30,6 +32,10 @@ type ProductRow = {
   buy_box_pct: number | null
   wow_change: number | null
   prev_revenue: number
+  prev_units: number
+  prev_sessions: number
+  prev_conv_rate: number | null
+  prev_asp: number | null
 }
 
 type DataPoint = {
@@ -136,6 +142,8 @@ export default function ProductPerformance() {
   const [dateRange, setDateRange]       = useState<DateRange | null>(null)
   const [products, setProducts]         = useState<ProductRow[]>([])
   const [allPeriodData, setAllPeriodData] = useState<Record<string, DataPoint[]>>({})
+  const [diagnosticData, setDiagnosticData] = useState<Record<string, TrafficDiagnosticPoint[]>>({})
+  const [diagnosticLoadingSku, setDiagnosticLoadingSku] = useState<string | null>(null)
   const [loading, setLoading]           = useState(true)
   const [loadError, setLoadError]       = useState<string | null>(null)
   const [cadenceLoading, setCadenceLoading] = useState(false)
@@ -225,6 +233,8 @@ export default function ProductPerformance() {
       setLoadError(null)
       setExpandedSku(null)
       setAllPeriodData({})
+      setDiagnosticData({})
+      setDiagnosticLoadingSku(null)
       setCadenceLimit(50)
       setPage(0)
 
@@ -251,6 +261,10 @@ export default function ProductPerformance() {
         const conv = Number(r.conv_rate) || 0
         const bb = r.buy_box_pct != null ? Number(r.buy_box_pct) : null
         const prev = Number(r.prev_revenue) || 0
+        const prevUnits = Number(r.prev_units) || 0
+        const prevSessions = Number(r.prev_sessions) || 0
+        const prevConv = prevSessions > 0 ? prevUnits / prevSessions * 100 : null
+        const prevAsp = prevUnits > 0 ? prev / prevUnits : null
         const wow = prev > 0 ? ((revenue - prev) / prev) * 100 : null
         const asp = units > 0 ? revenue / units : 0
 
@@ -259,6 +273,8 @@ export default function ProductPerformance() {
           revenue: Math.round(revenue), units, sessions,
           conv_rate: conv, asp, buy_box_pct: bb,
           wow_change: wow, prev_revenue: Math.round(prev),
+          prev_units: prevUnits, prev_sessions: prevSessions,
+          prev_conv_rate: prevConv, prev_asp: prevAsp,
         })
 
       }
@@ -291,6 +307,48 @@ export default function ProductPerformance() {
     })
     return () => { cancelled = true }
   }, [expandedSku, dateRange, markets])
+
+  useEffect(() => {
+    if (!expandedSku || !dateRange || diagnosticData[expandedSku]) return
+    let cancelled = false
+    setDiagnosticLoadingSku(expandedSku)
+    supabase.rpc('get_sku_traffic_inventory_diagnostic', {
+      p_start: dateRange.startDate,
+      p_end: dateRange.endDate,
+      p_markets: markets,
+      p_sku: expandedSku,
+    }).then(({ data, error }) => {
+      if (cancelled) return
+      if (error) {
+        console.error(error)
+        setDiagnosticData(previous => ({ ...previous, [expandedSku]: [] }))
+      } else {
+        const points: TrafficDiagnosticPoint[] = ((data || []) as any[]).map(point => ({
+          raw_date: point.d,
+          start_date: new Date(point.d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          sessions: point.sessions == null ? null : Number(point.sessions),
+          page_views: point.page_views == null ? null : Number(point.page_views),
+          units: point.units == null ? null : Number(point.units),
+          conv_rate: point.conv_rate == null ? null : Number(point.conv_rate),
+          buy_box_pct: point.buy_box_pct == null ? null : Number(point.buy_box_pct),
+          sales_market_count: Number(point.sales_market_count) || 0,
+          selected_market_count: Number(point.selected_market_count) || markets.length,
+          inventory_snapshot_date: point.inventory_snapshot_date,
+          inventory_age_days: point.inventory_age_days == null ? null : Number(point.inventory_age_days),
+          inventory_market_count: Number(point.inventory_market_count) || 0,
+          available_quantity: point.available_quantity == null ? null : Number(point.available_quantity),
+          fulfillable_quantity: point.fulfillable_quantity == null ? null : Number(point.fulfillable_quantity),
+          reserved_customerorders: point.reserved_customerorders == null ? null : Number(point.reserved_customerorders),
+          reserved_fc_transfers: point.reserved_fc_transfers == null ? null : Number(point.reserved_fc_transfers),
+          reserved_fc_processing: point.reserved_fc_processing == null ? null : Number(point.reserved_fc_processing),
+          inbound_quantity: point.inbound_quantity == null ? null : Number(point.inbound_quantity),
+        }))
+        setDiagnosticData(previous => ({ ...previous, [expandedSku]: points }))
+      }
+      setDiagnosticLoadingSku(current => current === expandedSku ? null : current)
+    })
+    return () => { cancelled = true }
+  }, [expandedSku, dateRange, markets, diagnosticData])
 
   useEffect(() => {
     if (tab !== 'cadence' || !dateRange || loading || products.length === 0) return
@@ -733,6 +791,11 @@ export default function ProductPerformance() {
                           <tr key={p.sku + '-exp'} style={{ borderBottom: '1px solid var(--border)' }}>
                             <td colSpan={11} style={{ padding: '0 20px 20px 20px', background: 'var(--accent-light)' }}>
                               <div style={{ paddingTop: '16px' }}>
+                                <ProductPerformanceDiagnostic
+                                  product={p}
+                                  points={diagnosticData[p.sku] || []}
+                                  loading={diagnosticLoadingSku === p.sku || diagnosticData[p.sku] === undefined}
+                                />
                                 <div style={{ display: 'flex', gap: '28px', marginBottom: '16px', flexWrap: 'wrap' }}>
                                   {[
                                     { label: 'Revenue',   value: fmtCurrency(p.revenue) },
