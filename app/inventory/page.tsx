@@ -28,7 +28,7 @@ const SUPPLIER_SHIP_DEFAULT   = 28
 const SUPPLIER_BUFFER_DEFAULT = 60
 const MAX_FORECAST_DAYS       = 365
 const FORECAST_HISTORY_DAYS   = 14
-const TABLE_PAGE_SIZE         = 100
+const TABLE_PAGE_SIZE         = 50
 
 type TabType = 'inventory' | 'fba' | 'supplier'
 
@@ -1432,7 +1432,7 @@ export default function Inventory() {
               </div>
 
               <div className="card" style={{ overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+                <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
@@ -1621,7 +1621,7 @@ export default function Inventory() {
               </div>
 
               <div className="card" style={{ overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+                <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
@@ -1880,7 +1880,7 @@ export default function Inventory() {
 
               {/* Supplier Table */}
               <div className="card" style={{ overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+                <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>

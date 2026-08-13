@@ -30,7 +30,13 @@ type ProfitabilityRow = {
   net_proceeds_before_ads_ldp: number | string
   transaction_count: number | string
   last_transaction_date: string | null
-}
+  shipped_units: number | string
+  refunded_units: number | string
+  net_units_for_cogs: number | string
+  ldp_cost: number | string
+  proceeds_after_ldp_before_ads: number | string
+  ldp_coverage_pct: number | string
+  missing_ldp_units: number | string}
 
 type CoverageRow = {
   pnl_category: string
@@ -153,7 +159,7 @@ export default function ProfitabilityPage() {
         p_markets: markets,
       }
       const [skuResult, coverageResult, feeBreakdownResult] = await Promise.all([
-        supabase.rpc('get_native_sku_profitability', params),
+        supabase.rpc('get_native_sku_economics', params),
         supabase.rpc('get_native_profitability_coverage', params),
         supabase.rpc('get_native_account_fee_breakdown', params),
       ])
@@ -190,6 +196,12 @@ export default function ProfitabilityPage() {
     0,
   )
   const unallocatedFees = n(coverageByCategory.amazon_fees?.unallocated_amount)
+  const activeEconomics = rows.filter(row => n(row.transaction_count) > 0)
+  const accountLdpCost = activeEconomics.reduce((sum, row) => sum + n(row.ldp_cost), 0)
+  const accountAfterLdp = activeEconomics.reduce((sum, row) => sum + n(row.proceeds_after_ldp_before_ads), 0)
+  const shippedUnits = activeEconomics.reduce((sum, row) => sum + n(row.shipped_units), 0)
+  const coveredUnits = activeEconomics.reduce((sum, row) => sum + n(row.shipped_units) * n(row.ldp_coverage_pct) / 100, 0)
+  const accountLdpCoverage = shippedUnits > 0 ? coveredUnits / shippedUnits * 100 : 100
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -201,7 +213,7 @@ export default function ProfitabilityPage() {
       const matchesFilter = filter === 'all'
         || (filter === 'activity' && hasActivity)
         || (filter === 'no_activity' && !hasActivity)
-        || (filter === 'negative' && hasActivity && n(row.net_proceeds_before_ads_ldp) < 0)
+        || (filter === 'negative' && hasActivity && n(row.proceeds_after_ldp_before_ads) < 0)
       return matchesWorkspaceSelection && matchesQuery && matchesFilter
     })
   }, [rows, query, filter, selectedProducts])
@@ -211,7 +223,7 @@ export default function ProfitabilityPage() {
     { value: 'all', label: 'All SKUs' },
     { value: 'activity', label: 'With activity' },
     { value: 'no_activity', label: 'No activity' },
-    { value: 'negative', label: 'Negative proceeds' },
+    { value: 'negative', label: 'Negative before ads' },
   ]
 
   async function toggleRow(row: ProfitabilityRow, key: string) {
@@ -269,7 +281,7 @@ export default function ProfitabilityPage() {
       <Info size={16} style={{ color: 'var(--accent)', flex: '0 0 auto', marginTop: 1 }} />
       <div>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>This is not net profit yet</div>
-        <div style={{ marginTop: 3, fontSize: 10, lineHeight: 1.5, color: 'var(--text-muted)' }}>Net proceeds include sales, promotions, refunds, Amazon fees, shipping, and reimbursements. LDP is now available for covered products but is not subtracted here until shipment-cost reconciliation is activated. Product advertising remains unconnected.</div>
+        <div style={{ marginTop: 3, fontSize: 10, lineHeight: 1.5, color: 'var(--text-muted)' }}>Amazon net proceeds remain the settlement figure. SellerIQ subtracts recognized LDP-based COGS separately to show proceeds after COGS, before advertising. Advertising remains unconnected, so this is not final contribution profit.</div>
       </div>
     </div>
 
@@ -277,9 +289,9 @@ export default function ProfitabilityPage() {
 
     <div className="analytics-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
       <SummaryCard label="Gross sales" value={formatMoney(accountGrossSales)} note="Amazon finance ledger" />
-      <SummaryCard label="Net proceeds" value={formatMoney(accountNetProceeds)} note="Before product ads and LDP" />
-      <SummaryCard label="Advertising" value={formatMoney(accountAds)} note="Account total; SKU allocation pending" tone="warning" />
-      <SummaryCard label="Account-level fees" value={formatMoney(unallocatedFees)} note="Present, but not tied to a SKU" tone="warning" />
+      <SummaryCard label="Net proceeds" value={formatMoney(accountNetProceeds)} note="Amazon settlement activity" />
+      <SummaryCard label="Recognized COGS" value={formatMoney(-accountLdpCost)} note={`${accountLdpCoverage.toFixed(1)}% LDP coverage`} tone={accountLdpCoverage < 100 ? 'warning' : 'default'} />
+      <SummaryCard label="After COGS" value={formatMoney(accountAfterLdp)} note="Before product advertising" tone={accountAfterLdp < 0 ? 'warning' : 'default'} />
     </div>
 
     <button
@@ -353,12 +365,11 @@ export default function ProfitabilityPage() {
       : <div style={{ overflowX: 'hidden' }}>
         <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
           <colgroup>
-            <col style={{ width: '26%' }} /><col style={{ width: '5%' }} /><col style={{ width: '9%' }} />
-            <col style={{ width: '9%' }} /><col style={{ width: '8%' }} /><col style={{ width: '9%' }} />
-            <col style={{ width: '8%' }} /><col style={{ width: '11%' }} /><col style={{ width: '11%' }} />
-            <col style={{ width: '4%' }} />
+            <col style={{ width: '34%' }} /><col style={{ width: '6%' }} /><col style={{ width: '13%' }} />
+            <col style={{ width: '13%' }} /><col style={{ width: '12%' }} /><col style={{ width: '16%' }} />
+            <col style={{ width: '6%' }} />
           </colgroup>
-          <thead><tr><th style={{ textAlign: 'left' }}>Product</th><th style={{ textAlign: 'center' }}>Market</th><th style={{ textAlign: 'right' }}>Gross sales</th><th style={{ textAlign: 'right' }}>Promotions</th><th style={{ textAlign: 'right' }}>Refunds</th><th style={{ textAlign: 'right' }}>Amazon fees</th><th style={{ textAlign: 'right' }}>Shipping</th><th style={{ textAlign: 'right' }}>Reimbursements</th><th style={{ textAlign: 'right' }}>Net proceeds</th><th style={{ width: 28 }} /></tr></thead>
+          <thead><tr><th style={{ textAlign: 'left' }}>Product</th><th style={{ textAlign: 'center' }}>Market</th><th style={{ textAlign: 'right' }}>Gross sales</th><th style={{ textAlign: 'right' }}>Net proceeds</th><th style={{ textAlign: 'right' }}>COGS</th><th style={{ textAlign: 'right' }}>After COGS</th><th style={{ width: 28 }} /></tr></thead>
           <tbody>{visibleRows.map(row => {
             const key = `${row.marketplace}:${row.sku}`
             const expanded = expandedKey === key
@@ -368,18 +379,15 @@ export default function ProfitabilityPage() {
                 <td><div style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` Â· ${row.asin}` : ''}</div></td>
                 <td style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>{row.marketplace}</td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.promotions) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.promotions) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.refunds) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.refunds) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.amazon_fees) < 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(row.amazon_fees) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.shipping) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.reimbursements) : 'â€”'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: n(row.net_proceeds_before_ads_ldp) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{hasActivity ? formatMoney(row.net_proceeds_before_ads_ldp) : 'No activity'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.net_proceeds_before_ads_ldp) : 'No activity'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.ldp_cost) > 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(-n(row.ldp_cost)) : 'â€”'}<div style={{ marginTop: 2, fontSize: 8, color: n(row.ldp_coverage_pct) < 100 ? 'var(--amber)' : 'var(--text-dim)' }}>{n(row.ldp_coverage_pct).toFixed(0)}% covered</div></td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: n(row.proceeds_after_ldp_before_ads) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{hasActivity ? formatMoney(row.proceeds_after_ldp_before_ads) : 'No activity'}<div style={{ marginTop: 2, fontSize: 8, color: 'var(--text-dim)' }}>before ads</div></td>
                 <td style={{ textAlign: 'center', color: 'var(--text-dim)' }}>{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</td>
               </tr>
-              {expanded && <tr><td colSpan={10} style={{ padding: 0 }}>
+              {expanded && <tr><td colSpan={7} style={{ padding: 0 }}>
                 <div style={{ padding: '15px 18px', background: 'var(--bg-elevated)' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 18 }}>
-                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Sales + promotions + refunds + Amazon fees + shipping + reimbursements = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong></div></div>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Amazon net proceeds <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong> âˆ’ recognized COGS <strong style={{ color: 'var(--red)' }}>{formatMoney(row.ldp_cost)}</strong> = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.proceeds_after_ldp_before_ads)}</strong> before ads</div></div>
                     <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` Â· latest ${row.last_transaction_date}` : ''}</div></div>
                     <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Validation</div><div style={{ marginTop: 5, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {!row.asin && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Missing ASIN</span>}
@@ -425,5 +433,8 @@ export default function ProfitabilityPage() {
     {!loading && visibleRows.length < filteredRows.length && <div style={{ textAlign: 'center', marginTop: 14 }}><button onClick={() => setVisibleCount(count => count + PAGE_SIZE)} style={{ padding: '8px 20px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>Load more Â· showing {visibleRows.length} of {filteredRows.length}</button></div>}
   </div>
 }
+
+
+
 
 
