@@ -16,6 +16,12 @@
 # next.js
 /.next/
 /out/
+# Any build-output variant: /.next-pre-*/ snapshots taken before risky changes,
+# /.next-codex/, and anything similar added later. Build output inlines every
+# NEXT_PUBLIC_* env var, so these directories hold live credentials and must
+# never be committed. Matched by prefix rather than by name on purpose -- naming
+# them one at a time is how /.next-codex/ went untracked-but-unignored.
+/.next-*/
 
 # production
 /build
