@@ -9,11 +9,15 @@ import {
   LoaderCircle,
   Search,
 } from 'lucide-react'
+import {
+  Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts'
 import DateRangeFilter, { computeRange, type DateRange } from '@/components/DateRangeFilter'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DashboardState from '@/components/DashboardState'
 import LdpCostManager from '@/components/LdpCostManager'
 import { useProductSelection } from '@/components/ProductSelectionContext'
+import { ELLIPSIS, EM_DASH, MIDDOT, MINUS, skuAsinLabel } from '@/lib/displayText'
 import { supabase } from '@/lib/supabase'
 
 type ProfitabilityRow = {
@@ -72,6 +76,22 @@ type FinanceTransaction = {
 
 type RowFilter = 'all' | 'activity' | 'no_activity' | 'negative'
 
+// One column of the revenue waterfall. `span` is a Recharts range bar ([low, high]),
+// which floats the column between two levels. A stacked invisible-base bar would be
+// the other way to do this, but it renders wrong once a level goes negative, because
+// Recharts stacks negative and positive values on opposite sides of the axis.
+// `change` is the signed movement for the step (0 for levels) and `value` the level
+// it lands on; both feed the tooltip. `kind` drives the color. A step is only a cost
+// if it actually moves down -- reimbursements can exceed fees, and calling that a
+// negative would misreport a gain.
+type WaterfallStep = {
+  label: string
+  span: [number, number]
+  change: number
+  value: number
+  kind: 'total' | 'cost' | 'gain'
+}
+
 const PAGE_SIZE = 50
 const INITIAL_RANGE = computeRange('last_90d', '', '')
 const INCLUDED_CATEGORIES = ['gross_sales', 'promotions', 'refunds', 'amazon_fees', 'shipping', 'reimbursements']
@@ -80,6 +100,14 @@ const money = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
   maximumFractionDigits: 0,
+})
+
+// Axis ticks only. Full precision stays in the cards, table, and tooltips.
+const compactMoney = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
 })
 
 function n(value: number | string | null | undefined) {
@@ -122,8 +150,69 @@ function SummaryCard({ label, value, note, tone = 'default' }: {
 }) {
   return <div className="card" style={{ padding: '14px 16px' }}>
     <div style={{ fontSize: 9, color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{label}</div>
-    <div style={{ marginTop: 7, fontSize: 22, lineHeight: 1, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: tone === 'warning' ? 'var(--amber)' : 'var(--text-primary)' }}>{value}</div>
+    <div style={{ marginTop: 7, fontSize: 22, lineHeight: 1, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: tone === 'warning' ? 'var(--chart-warning)' : 'var(--text-primary)' }}>{value}</div>
     <div style={{ marginTop: 7, fontSize: 10, color: 'var(--text-muted)' }}>{note}</div>
+  </div>
+}
+
+// Tier 1 headline metric. Deliberately NOT labelled net profit or net margin:
+// advertising spend is not in these numbers yet. Once Amazon Ads is connected and
+// ad cost is subtracted, promote these to true Net / Contribution Profit labels.
+function HeroCard({ label, value, note, tone = 'default' }: {
+  label: string
+  value: string
+  note: string
+  tone?: 'default' | 'warning'
+}) {
+  return <div className="card" style={{ padding: '18px 20px' }}>
+    <div style={{ fontSize: 10, color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{label}</div>
+    <div style={{ marginTop: 10, fontSize: 34, lineHeight: 1, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: tone === 'warning' ? 'var(--chart-warning)' : 'var(--text-primary)' }}>{value}</div>
+    <div style={{ marginTop: 9, fontSize: 10, lineHeight: 1.45, color: 'var(--text-muted)' }}>{note}</div>
+  </div>
+}
+
+// Gross revenue -> net proceeds -> proceeds after COGS, with each drop shown as a
+// floating bar so the leak between levels is the visible quantity.
+function buildWaterfall(gross: number, net: number, after: number): WaterfallStep[] {
+  if (![gross, net, after].every(Number.isFinite) || gross <= 0) return []
+  // A level: a column from the axis to the running total.
+  const level = (label: string, to: number): WaterfallStep => ({
+    label,
+    span: [Math.min(0, to), Math.max(0, to)],
+    change: 0,
+    value: to,
+    kind: 'total',
+  })
+  // A movement: a column floating between the previous level and the next one.
+  const move = (label: string, from: number, to: number): WaterfallStep => ({
+    label,
+    span: [Math.min(from, to), Math.max(from, to)],
+    change: to - from,
+    value: to,
+    kind: to < from ? 'cost' : 'gain',
+  })
+  return [
+    level('Gross revenue', gross),
+    move('Amazon fees and returns', gross, net),
+    level('Net proceeds', net),
+    move('Recognized COGS', net, after),
+    level('After COGS', after),
+  ]
+}
+
+function WaterfallTooltip({ active, payload }: {
+  active?: boolean
+  payload?: Array<{ payload: WaterfallStep }>
+}) {
+  const step = active ? payload?.[0]?.payload : undefined
+  if (!step) return null
+  const isLevel = step.kind === 'total'
+  return <div style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-card)', boxShadow: 'var(--shadow-md)', fontSize: 12 }}>
+    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{step.label}</div>
+    <div style={{ marginTop: 3, fontFamily: 'JetBrains Mono, monospace', color: step.kind === 'cost' ? 'var(--red)' : 'var(--text-primary)' }}>
+      {formatMoney(isLevel ? step.value : step.change)}
+    </div>
+    {!isLevel && <div style={{ marginTop: 2, fontSize: 10, color: 'var(--text-muted)' }}>{`Leaves ${formatMoney(step.value)}`}</div>}
   </div>
 }
 
@@ -202,6 +291,13 @@ export default function ProfitabilityPage() {
   const shippedUnits = activeEconomics.reduce((sum, row) => sum + n(row.shipped_units), 0)
   const coveredUnits = activeEconomics.reduce((sum, row) => sum + n(row.shipped_units) * n(row.ldp_coverage_pct) / 100, 0)
   const accountLdpCoverage = shippedUnits > 0 ? coveredUnits / shippedUnits * 100 : 100
+  // Share of gross revenue still held after COGS, before advertising. Null rather than
+  // 0 when there is no revenue, so the card shows a dash instead of a misleading 0%.
+  const afterCogsMargin = accountGrossSales > 0 ? accountAfterLdp / accountGrossSales * 100 : null
+  const waterfall = useMemo(
+    () => buildWaterfall(accountGrossSales, accountNetProceeds, accountAfterLdp),
+    [accountGrossSales, accountNetProceeds, accountAfterLdp],
+  )
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -269,7 +365,7 @@ export default function ProfitabilityPage() {
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, marginBottom: 18, flexWrap: 'wrap' }}>
       <div>
         <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>Profitability</h1>
-        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 12 }}>Traceable Amazon proceeds by SKU Â· all amounts normalized to USD</p>
+        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 12 }}>{`Traceable Amazon proceeds by SKU ${MIDDOT} all amounts normalized to USD`}</p>
       </div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
         <DateRangeFilter defaultPreset="last_90d" onChange={setRange} />
@@ -285,14 +381,65 @@ export default function ProfitabilityPage() {
       </div>
     </div>
 
-    <LdpCostManager />
-
-    <div className="analytics-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
-      <SummaryCard label="Gross sales" value={formatMoney(accountGrossSales)} note="Amazon finance ledger" />
-      <SummaryCard label="Net proceeds" value={formatMoney(accountNetProceeds)} note="Amazon settlement activity" />
-      <SummaryCard label="Recognized COGS" value={formatMoney(-accountLdpCost)} note={`${accountLdpCoverage.toFixed(1)}% LDP coverage`} tone={accountLdpCoverage < 100 ? 'warning' : 'default'} />
-      <SummaryCard label="After COGS" value={formatMoney(accountAfterLdp)} note="Before product advertising" tone={accountAfterLdp < 0 ? 'warning' : 'default'} />
+    {/* Tier 1: headline numbers. Ad spend is not in these figures, so the labels stay
+        conservative -- see the note on HeroCard before renaming them. */}
+    <div className="analytics-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 12 }}>
+      <HeroCard
+        label="Gross revenue"
+        value={formatMoney(accountGrossSales)}
+        note="Amazon finance ledger, before fees and returns"
+      />
+      <HeroCard
+        label="Proceeds after COGS"
+        value={formatMoney(accountAfterLdp)}
+        note="Amazon proceeds minus recognized COGS, before advertising"
+        tone={accountAfterLdp < 0 ? 'warning' : 'default'}
+      />
+      <HeroCard
+        label="Margin % (after COGS)"
+        value={afterCogsMargin === null ? EM_DASH : `${afterCogsMargin.toFixed(1)}%`}
+        note="Share of gross revenue retained after COGS, before advertising"
+        tone={afterCogsMargin !== null && afterCogsMargin < 0 ? 'warning' : 'default'}
+      />
     </div>
+
+    {/* Tier 2: shape of the period. The waterfall runs off the period aggregates this
+        page already loads. The dual-axis line and stacked bar trends need a daily
+        finance series, which no client-callable RPC exposes yet. */}
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 10, marginBottom: 14 }}>
+      <div className="card" style={{ padding: '15px 18px' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>Where gross revenue goes</div>
+        <div style={{ marginTop: 3, fontSize: 10, color: 'var(--text-muted)' }}>{`Each red column is a leak ${MIDDOT} blue and green are the levels that survive it`}</div>
+        {waterfall.length === 0
+          ? <div style={{ padding: '46px 0', textAlign: 'center', fontSize: 11, color: 'var(--text-muted)' }}>No gross revenue in this period to break down.</div>
+          : <div style={{ height: 236, marginTop: 12 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={waterfall} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval={0} />
+                <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} width={62} tickFormatter={value => compactMoney.format(Number(value))} />
+                <Tooltip content={<WaterfallTooltip />} cursor={{ fill: 'var(--bg-hover)' }} />
+                <Bar dataKey="span" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                  {waterfall.map((step, index) => <Cell
+                    key={step.label}
+                    fill={step.kind === 'cost'
+                      ? 'var(--red)'
+                      : step.kind === 'gain' || index === waterfall.length - 1
+                        ? 'var(--chart-success)'
+                        : 'var(--chart-primary)'}
+                  />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>}
+      </div>
+      <div style={{ display: 'grid', gap: 10, alignContent: 'start' }}>
+        <SummaryCard label="Net proceeds" value={formatMoney(accountNetProceeds)} note="Amazon settlement activity" />
+        <SummaryCard label="Recognized COGS" value={formatMoney(-accountLdpCost)} note={`${accountLdpCoverage.toFixed(1)}% LDP coverage`} tone={accountLdpCoverage < 100 ? 'warning' : 'default'} />
+      </div>
+    </div>
+
+    <LdpCostManager />
 
     <button
       onClick={() => setShowCoverage(value => !value)}
@@ -344,6 +491,7 @@ export default function ProfitabilityPage() {
       <button type="button" onClick={() => setSelectedProducts([])}>Clear selection</button>
     </div>}
 
+    {/* Tier 3: profitability breakdown by product. */}
     <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap' }}>
       <div style={{ position: 'relative', flex: '1 1 360px', maxWidth: 620 }}>
         <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
@@ -376,19 +524,19 @@ export default function ProfitabilityPage() {
             const hasActivity = n(row.transaction_count) > 0
             return <React.Fragment key={key}>
               <tr onClick={() => void toggleRow(row, key)} style={{ cursor: 'pointer', background: expanded ? 'var(--accent-light)' : undefined }}>
-                <td><div style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}{row.asin ? ` Â· ${row.asin}` : ''}</div></td>
+                <td><div style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>{row.title}</div><div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{skuAsinLabel(row.sku, row.asin)}</div></td>
                 <td style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>{row.marketplace}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : 'â€”'}</td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.gross_sales) : EM_DASH}</td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{hasActivity ? formatMoney(row.net_proceeds_before_ads_ldp) : 'No activity'}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.ldp_cost) > 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(-n(row.ldp_cost)) : 'â€”'}<div style={{ marginTop: 2, fontSize: 8, color: n(row.ldp_coverage_pct) < 100 ? 'var(--amber)' : 'var(--text-dim)' }}>{n(row.ldp_coverage_pct).toFixed(0)}% covered</div></td>
+                <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(row.ldp_cost) > 0 ? 'var(--red)' : 'var(--text-muted)' }}>{hasActivity ? formatMoney(-n(row.ldp_cost)) : EM_DASH}<div style={{ marginTop: 2, fontSize: 8, color: n(row.ldp_coverage_pct) < 100 ? 'var(--amber)' : 'var(--text-dim)' }}>{n(row.ldp_coverage_pct).toFixed(0)}% covered</div></td>
                 <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: n(row.proceeds_after_ldp_before_ads) < 0 ? 'var(--red)' : 'var(--text-primary)' }}>{hasActivity ? formatMoney(row.proceeds_after_ldp_before_ads) : 'No activity'}<div style={{ marginTop: 2, fontSize: 8, color: 'var(--text-dim)' }}>before ads</div></td>
                 <td style={{ textAlign: 'center', color: 'var(--text-dim)' }}>{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</td>
               </tr>
               {expanded && <tr><td colSpan={7} style={{ padding: 0 }}>
                 <div style={{ padding: '15px 18px', background: 'var(--bg-elevated)' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 18 }}>
-                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Amazon net proceeds <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong> âˆ’ recognized COGS <strong style={{ color: 'var(--red)' }}>{formatMoney(row.ldp_cost)}</strong> = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.proceeds_after_ldp_before_ads)}</strong> before ads</div></div>
-                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` Â· latest ${row.last_transaction_date}` : ''}</div></div>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Calculation</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>Amazon net proceeds <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.net_proceeds_before_ads_ldp)}</strong>{` ${MINUS} recognized COGS `}<strong style={{ color: 'var(--red)' }}>{formatMoney(row.ldp_cost)}</strong> = <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(row.proceeds_after_ldp_before_ads)}</strong> before ads</div></div>
+                    <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Source coverage</div><div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>{n(row.transaction_count).toLocaleString()} Amazon finance transactions{row.last_transaction_date ? ` ${MIDDOT} latest ${row.last_transaction_date}` : ''}</div></div>
                     <div><div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 700 }}>Validation</div><div style={{ marginTop: 5, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {!row.asin && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Missing ASIN</span>}
                       {n(row.gross_sales) === 0 && hasActivity && <span style={{ padding: '3px 6px', borderRadius: 4, background: 'var(--amber-light)', color: 'var(--amber)', fontSize: 9 }}>Activity without sales</span>}
@@ -403,7 +551,7 @@ export default function ProfitabilityPage() {
                       {transactionLoadingKey === key && <LoaderCircle className="cadence-loading-spinner" size={16} style={{ color: 'var(--accent)' }} />}
                     </div>
                     {transactionErrors[key] ? <div style={{ padding: 10, color: 'var(--red)', fontSize: 10 }}>{transactionErrors[key]}</div>
-                    : transactionLoadingKey === key ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>Loading transaction evidenceâ€¦</div>
+                    : transactionLoadingKey === key ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>{`Loading transaction evidence${ELLIPSIS}`}</div>
                     : (transactionsByKey[key] || []).length === 0 ? <div style={{ padding: 18, textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}>No source transactions found for this SKU and period.</div>
                     : <div style={{ overflowX: 'hidden', border: '1px solid var(--border)', borderRadius: 6 }}>
                       <table className="profitability-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
@@ -412,7 +560,7 @@ export default function ProfitabilityPage() {
                         <tbody>{(transactionsByKey[key] || []).map(transaction => <tr key={transaction.transaction_id}>
                           <td style={{ whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.sale_date}</td>
                           <td><div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9 }}>{transaction.order_id || 'No order ID'}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.description || transaction.transaction_id.slice(0, 16)}</div></td>
-                          <td><div style={{ fontSize: 9 }}>{transaction.transaction_type}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.transaction_status}{transaction.has_unmapped_component ? ' Â· unmapped component' : ''}</div></td>
+                          <td><div style={{ fontSize: 9 }}>{transaction.transaction_type}</div><div style={{ marginTop: 2, color: 'var(--text-dim)', fontSize: 8 }}>{transaction.transaction_status}{transaction.has_unmapped_component ? ` ${MIDDOT} unmapped component` : ''}</div></td>
                           <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>{formatMoney(transaction.gross_sales)}</td>
                           <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(transaction.refunds) < 0 ? 'var(--red)' : undefined }}>{formatMoney(transaction.refunds)}</td>
                           <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: n(transaction.amazon_fees) < 0 ? 'var(--red)' : undefined }}>{formatMoney(transaction.amazon_fees)}</td>
@@ -430,7 +578,7 @@ export default function ProfitabilityPage() {
       </div>}
     </div>
 
-    {!loading && visibleRows.length < filteredRows.length && <div style={{ textAlign: 'center', marginTop: 14 }}><button onClick={() => setVisibleCount(count => count + PAGE_SIZE)} style={{ padding: '8px 20px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>Load more Â· showing {visibleRows.length} of {filteredRows.length}</button></div>}
+    {!loading && visibleRows.length < filteredRows.length && <div style={{ textAlign: 'center', marginTop: 14 }}><button onClick={() => setVisibleCount(count => count + PAGE_SIZE)} style={{ padding: '8px 20px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>{`Load more ${MIDDOT} showing ${visibleRows.length} of ${filteredRows.length}`}</button></div>}
   </div>
 }
 
