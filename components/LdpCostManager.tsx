@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronDown, ChevronRight, Coins, Download, LoaderCircle, Upload } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import styles from './LdpCostManager.module.css'
 
 type Cost = {
@@ -12,7 +12,13 @@ type Cost = {
 type Preview = { workbookRows: number; acceptedCount: number; rejectedCount: number }
 type Missing = { marketplace: string; sku: string; title: string }
 
-export default function LdpCostManager() {
+// Lets a caller (the Profitability low-coverage banner) drive this panel straight to the
+// SKUs it is complaining about, instead of leaving the user to expand it and re-derive the
+// filter by hand. `nonce` exists so repeated requests with identical view/marketplace
+// still re-fire the effect below.
+export type LdpFocusRequest = { view: 'all' | 'missing'; marketplace?: string; nonce: number }
+
+export default function LdpCostManager({ focusRequest = null }: { focusRequest?: LdpFocusRequest | null }) {
   const [open, setOpen] = useState(false)
   const [costs, setCosts] = useState<Cost[]>([])
   const [missing, setMissing] = useState<Missing[]>([])
@@ -25,6 +31,8 @@ export default function LdpCostManager() {
   const [message, setMessage] = useState('')
   const [view, setView] = useState<'all' | 'missing'>('all')
   const [editing, setEditing] = useState<{ sku: string; marketplace: string; ldp: string; effectiveFrom: string } | null>(null)
+  const [marketFilter, setMarketFilter] = useState('')
+  const panelRef = useRef<HTMLElement | null>(null)
 
   async function load() {
     setError('')
@@ -36,6 +44,24 @@ export default function LdpCostManager() {
   }
 
   useEffect(() => { load().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load LDP records.')) }, [])
+
+  // Honour an external focus request: expand, switch view, filter to the marketplace, and
+  // scroll into sight. Keyed on nonce alone -- the whole point is that an identical
+  // request should still take effect.
+  useEffect(() => {
+    if (!focusRequest) return
+    setOpen(true)
+    setView(focusRequest.view)
+    setMarketFilter(focusRequest.marketplace || '')
+    setQuery('')
+    setEditing(null)
+    // Deferred a frame so the panel has expanded before we measure where to scroll to.
+    const frame = requestAnimationFrame(() => {
+      panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => cancelAnimationFrame(frame)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest?.nonce])
 
   async function submit(action: 'preview' | 'import') {
     if (!file) { setError('Choose an .xlsx workbook first.'); return }
@@ -80,12 +106,20 @@ export default function LdpCostManager() {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const source = view === 'all' ? latest : missing
-    return source.filter(item => !needle || `${item.sku} ${'asin' in item ? item.asin || '' : ''} ${item.title} ${item.marketplace}`.toLowerCase().includes(needle))
-  }, [latest, missing, query, view])
+    return source.filter(item => {
+      // Exact marketplace match, kept separate from the text search on purpose. Routing a
+      // marketplace through `query` would also match any SKU or title containing the same
+      // letters -- searching "CA" pulls in GN-CAW02-199W and anything titled "Cabinet" --
+      // so a focus request would land on a list that only looked filtered.
+      if (marketFilter && item.marketplace !== marketFilter) return false
+      if (!needle) return true
+      return `${item.sku} ${'asin' in item ? item.asin || '' : ''} ${item.title} ${item.marketplace}`.toLowerCase().includes(needle)
+    })
+  }, [latest, missing, query, view, marketFilter])
   const us = latest.filter(item => item.marketplace === 'US').length
   const ca = latest.filter(item => item.marketplace === 'CA').length
 
-  return <section className={`card ${styles.shell}`}>
+  return <section ref={panelRef} className={`card ${styles.shell}`}>
     <button className={styles.summary} type="button" onClick={() => setOpen(value => !value)}>
       <span className={styles.summaryLeft}>
         <span className={styles.icon}><Coins size={17} /></span>
@@ -113,7 +147,7 @@ export default function LdpCostManager() {
         <div className={styles.previewCard}><div className={styles.previewValue} style={{ color: 'var(--amber)' }}>{preview.rejectedCount}</div><div className={styles.previewLabel}>Rejected and left untouched</div></div>
       </div>}
       {(message || error) && <div className={`${styles.message} ${error ? styles.error : ''}`}>{error || message}</div>}
-      <div className={styles.toolbar}><div><div className={styles.title}>Current LDP records</div><div className={styles.subtitle}>Latest effective record per SKU and marketplace</div></div><div className={styles.tabs}><button className={`${styles.tab} ${view === 'all' ? styles.activeTab : ''}`} onClick={() => setView('all')}>All costs ({latest.length})</button><button className={`${styles.tab} ${view === 'missing' ? styles.activeTab : ''}`} onClick={() => setView('missing')}>Missing costs ({missing.length})</button></div><input className={styles.search} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search SKU, ASIN, product, or market" /></div>
+      <div className={styles.toolbar}><div><div className={styles.title}>Current LDP records</div><div className={styles.subtitle}>Latest effective record per SKU and marketplace</div></div><div className={styles.tabs}><button className={`${styles.tab} ${view === 'all' ? styles.activeTab : ''}`} onClick={() => setView('all')}>All costs ({latest.length})</button><button className={`${styles.tab} ${view === 'missing' ? styles.activeTab : ''}`} onClick={() => setView('missing')}>Missing costs ({missing.filter(item => !marketFilter || item.marketplace === marketFilter).length})</button></div>{marketFilter && <button type="button" onClick={() => setMarketFilter('')} title="Show all marketplaces" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent-border)', background: 'var(--accent-light)', color: 'var(--accent)', font: 'inherit', fontSize: 10, fontWeight: 650, cursor: 'pointer' }}>{`${marketFilter} only`}<span aria-hidden="true" style={{ fontSize: 12, lineHeight: 1 }}>&times;</span><span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>Clear marketplace filter</span></button>}<input className={styles.search} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search SKU, ASIN, product, or market" /></div>
       <div className={styles.tableWrap}>{filtered.length ? <table className={styles.table}><thead><tr><th>Product</th><th>Market</th><th>LDP / unit</th><th>Effective</th><th>Source</th><th /></tr></thead><tbody>{filtered.map(item => {
         const key = `${item.marketplace}:${item.sku}`
         const isEditing = editing?.sku === item.sku && editing.marketplace === item.marketplace

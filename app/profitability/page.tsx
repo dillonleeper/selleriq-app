@@ -2,6 +2,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import {
+  AlertTriangle,
+  ArrowRight,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -95,6 +97,21 @@ type WaterfallStep = {
 const PAGE_SIZE = 50
 const INITIAL_RANGE = computeRange('last_90d', '', '')
 const INCLUDED_CATEGORIES = ['gross_sales', 'promotions', 'refunds', 'amazon_fees', 'shipping', 'reimbursements']
+
+// LDP coverage thresholds for the warning banner, expressed as a percentage of SHIPPED
+// UNITS that have an effective-dated cost -- not a percentage of SKUs. A handful of
+// high-volume SKUs without a cost understates COGS far more than a long tail of
+// low-volume ones, so units are what matter.
+//
+// Below WARN, "Proceeds after COGS" and "Margin %" are overstated by enough to change a
+// decision, so say so. Below CRITICAL, COGS is not merely incomplete but effectively
+// absent, and the banner escalates from amber to red.
+//
+// Tuning note: at the time of writing US sits at 95.3% and CA at 0.6%, so 95 puts US
+// just barely in the clear. If you would rather be told about US's 3,467 uncosted units,
+// raise WARN to 98 -- that is a judgement call about noise, not correctness.
+const LDP_COVERAGE_WARN_PCT = 95
+const LDP_COVERAGE_CRITICAL_PCT = 50
 
 const money = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -228,6 +245,11 @@ export default function ProfitabilityPage() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [showCoverage, setShowCoverage] = useState(false)
+  // Set by the low-coverage banner to drive LdpCostManager straight to its Missing costs
+  // view for one marketplace. The nonce is what makes a repeat click work: the view and
+  // marketplace may be unchanged, so without it the effect on the other side would not
+  // re-fire and the second click would appear to do nothing.
+  const [ldpFocus, setLdpFocus] = useState<{ view: 'missing'; marketplace: string; nonce: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [transactionsByKey, setTransactionsByKey] = useState<Record<string, FinanceTransaction[]>>({})
@@ -291,6 +313,49 @@ export default function ProfitabilityPage() {
   const shippedUnits = activeEconomics.reduce((sum, row) => sum + n(row.shipped_units), 0)
   const coveredUnits = activeEconomics.reduce((sum, row) => sum + n(row.shipped_units) * n(row.ldp_coverage_pct) / 100, 0)
   const accountLdpCoverage = shippedUnits > 0 ? coveredUnits / shippedUnits * 100 : 100
+
+  // Per-marketplace coverage, because the account-wide figure hides the problem whenever
+  // one market is well covered and another is not: US 95.3% + CA 0.6% averages out to a
+  // reassuring-looking 78.4%, and the banner would under-report a market with almost no
+  // cost data at all.
+  //
+  // Weighted by shipped units, matching accountLdpCoverage above. Note this is NOT an
+  // average of the per-SKU ldp_coverage_pct values -- that field defaults to 100 for a
+  // SKU with no shipments, so averaging it across SKUs reports coverage that does not
+  // exist (it reads 22.2% for CA, whose real unit coverage is 0.6%). activeEconomics
+  // already excludes zero-activity SKUs, and the unit weighting makes the default
+  // harmless regardless.
+  const ldpCoverageByMarket = useMemo(() => {
+    const totals = new Map<string, { shipped: number; covered: number; missingUnits: number; skusMissingCost: number; activeSkus: number }>()
+    for (const row of activeEconomics) {
+      const market = row.marketplace
+      const entry = totals.get(market) || { shipped: 0, covered: 0, missingUnits: 0, skusMissingCost: 0, activeSkus: 0 }
+      const rowShipped = n(row.shipped_units)
+      const rowMissing = n(row.missing_ldp_units)
+      entry.shipped += rowShipped
+      entry.covered += rowShipped * n(row.ldp_coverage_pct) / 100
+      entry.missingUnits += rowMissing
+      entry.activeSkus += 1
+      if (rowMissing > 0) entry.skusMissingCost += 1
+      totals.set(market, entry)
+    }
+    return [...totals.entries()]
+      .map(([marketplace, t]) => ({
+        marketplace,
+        coveragePct: t.shipped > 0 ? t.covered / t.shipped * 100 : 100,
+        ...t,
+      }))
+      .sort((a, b) => a.coveragePct - b.coveragePct)
+  }, [activeEconomics])
+
+  const lowCoverageMarkets = ldpCoverageByMarket.filter(market => market.coveragePct < LDP_COVERAGE_WARN_PCT)
+  const worstCoveragePct = lowCoverageMarkets.length
+    ? Math.min(...lowCoverageMarkets.map(market => market.coveragePct))
+    : 100
+  const coverageAlertIsCritical = worstCoveragePct < LDP_COVERAGE_CRITICAL_PCT
+  const coverageAlertColor = coverageAlertIsCritical ? 'var(--red)' : 'var(--yellow)'
+  const coverageAlertBorder = coverageAlertIsCritical ? 'rgba(198,40,40,0.28)' : 'rgba(140,109,31,0.30)'
+  const coverageAlertBackground = coverageAlertIsCritical ? 'var(--red-light)' : 'rgba(140,109,31,0.08)'
   // Share of gross revenue still held after COGS, before advertising. Null rather than
   // 0 when there is no revenue, so the card shows a dash instead of a misleading 0%.
   const afterCogsMargin = accountGrossSales > 0 ? accountAfterLdp / accountGrossSales * 100 : null
@@ -373,6 +438,51 @@ export default function ProfitabilityPage() {
       </div>
     </div>
 
+    {/* Data-integrity warning, deliberately above the "not net profit yet" note: that one
+        is standing context, this one means the numbers below are wrong right now. */}
+    {!loading && lowCoverageMarkets.length > 0 && (
+      <div
+        role="status"
+        style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 14, borderRadius: 8, border: `1px solid ${coverageAlertBorder}`, borderLeft: `3px solid ${coverageAlertColor}`, background: coverageAlertBackground }}
+      >
+        <AlertTriangle size={16} style={{ color: coverageAlertColor, flex: '0 0 auto', marginTop: 1 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>
+            {coverageAlertIsCritical ? 'COGS is missing for most units sold' : 'COGS is understated'}
+          </div>
+          <div style={{ marginTop: 3, fontSize: 10, lineHeight: 1.5, color: 'var(--text-muted)' }}>
+            {`Proceeds after COGS and Margin % above are overstated, because some units sold have no effective-dated landed cost. Coverage is measured against shipped units, not SKU count ${MIDDOT} a single high-volume SKU without a cost moves this more than a long tail of small ones.`}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 9 }}>
+            {lowCoverageMarkets.map(market => (
+              <div
+                key={market.marketplace}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-card)' }}
+              >
+                <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{market.marketplace}</span>
+                  {` ${MIDDOT} `}
+                  <strong style={{ color: market.coveragePct < LDP_COVERAGE_CRITICAL_PCT ? 'var(--red)' : 'var(--yellow)', fontVariantNumeric: 'tabular-nums' }}>
+                    {`${market.coveragePct.toFixed(1)}% covered`}
+                  </strong>
+                  {` ${MIDDOT} ${market.skusMissingCost.toLocaleString()} of ${market.activeSkus.toLocaleString()} active SKUs have no cost`}
+                  {` ${MIDDOT} ${market.missingUnits.toLocaleString()} uncosted units`}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLdpFocus({ view: 'missing', marketplace: market.marketplace, nonce: Date.now() })}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 9px', borderRadius: 6, border: `1px solid ${coverageAlertBorder}`, background: 'transparent', color: coverageAlertColor, font: 'inherit', fontSize: 10, fontWeight: 700, cursor: 'pointer', flex: '0 0 auto' }}
+                >
+                  {`Add ${market.marketplace} costs`}
+                  <ArrowRight size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )}
+
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', marginBottom: 14, borderRadius: 8, border: '1px solid var(--accent-border)', background: 'var(--accent-light)' }}>
       <Info size={16} style={{ color: 'var(--accent)', flex: '0 0 auto', marginTop: 1 }} />
       <div>
@@ -439,7 +549,7 @@ export default function ProfitabilityPage() {
       </div>
     </div>
 
-    <LdpCostManager />
+    <LdpCostManager focusRequest={ldpFocus} />
 
     <button
       onClick={() => setShowCoverage(value => !value)}
