@@ -141,6 +141,17 @@ function missingDateKeys(start: string, end: string, rows: WeeklyRow[]): string[
   return missing
 }
 
+// Render a date list without pasting hundreds of them into one sentence. The old copy
+// interpolated every missing date, which for Last 365 days meant a single unreadable
+// paragraph of 364 dates.
+const DATE_LIST_LIMIT = 6
+
+function summariseDates(dates: string[]): string {
+  const shown = dates.slice(0, DATE_LIST_LIMIT).map(fmtDateLabel).join(', ')
+  const rest = dates.length - DATE_LIST_LIMIT
+  return rest > 0 ? `${shown} and ${rest} more.` : `${shown}.`
+}
+
 function yearShiftKey(dateStr: string, years: number): string {
   const d = new Date(dateStr + 'T12:00:00')
   const month = d.getMonth()
@@ -251,13 +262,40 @@ export default function SalesOverview() {
   // from an empty result so a failed fetch isn't rendered as "no data exists".
   const [financeError, setFinanceError] = useState(false)
 
-  const priorYearAvailable = Boolean(dateRange?.startDate && salesFirstDate && yearShiftKey(dateRange.startDate, -1) >= salesFirstDate)
+  // Whether the prior window a given comparison mode would actually request falls inside
+  // the data we hold. This used to check previous_year only, which missed the mode that
+  // was really failing: the RPCs pair every current day to a prior day by ordinality and
+  // drop any current day whose partner is unavailable, so a prior window that predates
+  // salesFirstDate does not just disable the comparison -- it deletes the current period
+  // too. Under previous_period the prior window is the same length as the range and sits
+  // immediately before it, so every long preset reaches past first_date: YTD asked for
+  // 2025-05-16..2025-12-31 against a first_date of 2026-01-01 and got back nothing at all.
+  // Last quarter is the same fault one day wide (prior starts 2025-12-31).
+  const plannedEnd = dateRange?.endDate
+    ? (dataThrough && dataThrough < dateRange.endDate ? dataThrough : dateRange.endDate)
+    : ''
+  const canCompare = (mode: ComparisonMode) => {
+    if (!dateRange?.startDate || !plannedEnd || !salesFirstDate) return true
+    return comparisonWindow(dateRange.startDate, plannedEnd, mode).priorStart >= salesFirstDate
+  }
+  const priorYearAvailable = canCompare('previous_year')
+  const previousPeriodAvailable = canCompare('previous_period')
+  // Neither mode can reach far enough back: the selected range is as old as the history
+  // itself, so no comparison exists in any mode. The range still renders -- see
+  // 20260820140000_sales_overview_comparable_day_pairing.sql -- just without a comparison.
+  const comparisonImpossible = Boolean(salesFirstDate) && !priorYearAvailable && !previousPeriodAvailable
 
   useEffect(() => {
-    if (comparisonMode === 'previous_year' && salesFirstDate && !priorYearAvailable) {
+    // Move off a mode that cannot be computed, but only when the other one can be. When
+    // neither works there is nowhere useful to go, and forcing a switch would just swap
+    // one unavailable comparison for another while hiding that fact from the user.
+    if (!salesFirstDate) return
+    if (comparisonMode === 'previous_year' && !priorYearAvailable && previousPeriodAvailable) {
       setComparisonMode('previous_period')
+    } else if (comparisonMode === 'previous_period' && !previousPeriodAvailable && priorYearAvailable) {
+      setComparisonMode('previous_year')
     }
-  }, [comparisonMode, priorYearAvailable, salesFirstDate])
+  }, [comparisonMode, priorYearAvailable, previousPeriodAvailable, salesFirstDate])
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -478,6 +516,17 @@ export default function SalesOverview() {
   const missingCurrentDates = dateRange?.startDate && effectiveEnd
     ? missingDateKeys(dateRange.startDate, effectiveEnd, dailySeries)
     : []
+  // Split by cause, because the remedies are different and only one of them is a fault.
+  // Days before salesFirstDate are simply older than the warehouse -- nothing is wrong and
+  // nothing can be done. Days at or after it that are still absent mean a marketplace
+  // genuinely has not loaded, which is worth chasing (see the stranded-preliminary dates
+  // the nightly catch-up sweep now clears).
+  const missingBeforeHistory = salesFirstDate
+    ? missingCurrentDates.filter(date => date < salesFirstDate)
+    : []
+  const missingWithinHistory = salesFirstDate
+    ? missingCurrentDates.filter(date => date >= salesFirstDate)
+    : missingCurrentDates
 
   const bucketed = dateRange?.startDate && effectiveEnd
     ? bucketSeries(dailySeries, chartBucket, dateRange.startDate, effectiveEnd)
@@ -561,9 +610,25 @@ export default function SalesOverview() {
               </span>
             )}
           </p>
-          {missingCurrentDates.length > 0 && !loading && (
+          {/* Three genuinely different situations, previously all reported as "marketplaces
+              have not loaded" -- which was false for every one of the presets that were
+              actually failing, and sent the diagnosis after the wrong cause. */}
+          {!loading && comparisonImpossible && (
             <div className="overview-data-warning">
-              {missingCurrentDates.length} incomplete day{missingCurrentDates.length === 1 ? '' : 's'} excluded because one or more selected marketplaces have not loaded: {missingCurrentDates.map(fmtDateLabel).join(', ')}.
+              {`No comparable earlier period. This range reaches back to ${salesFirstDate ? fmtDateLabel(salesFirstDate) : 'your earliest data'}, so there is nothing before it to compare against. The figures below are complete; the comparison line and change indicators are hidden.`}
+            </div>
+          )}
+          {!loading && missingBeforeHistory.length > 0 && (
+            <div className="overview-data-warning">
+              {`${missingBeforeHistory.length} day${missingBeforeHistory.length === 1 ? '' : 's'} in this range predate${missingBeforeHistory.length === 1 ? 's' : ''} your first recorded data${salesFirstDate ? ` (${fmtDateLabel(salesFirstDate)})` : ''} and cannot be shown: ${summariseDates(missingBeforeHistory)}`}
+            </div>
+          )}
+          {!loading && missingWithinHistory.length > 0 && (
+            <div className="overview-data-warning">
+              {/* Covers both remaining causes: the day itself is short a marketplace, or
+                  the day it is compared against is. Worded to be true of either, since
+                  the series alone cannot tell us which side is short. */}
+              {`${missingWithinHistory.length} day${missingWithinHistory.length === 1 ? '' : 's'} excluded because not every selected marketplace has loaded data for ${missingWithinHistory.length === 1 ? 'it' : 'them'}, or for the ${missingWithinHistory.length === 1 ? 'day it is' : 'days they are'} compared against: ${summariseDates(missingWithinHistory)}`}
             </div>
           )}
         </div>
@@ -572,7 +637,7 @@ export default function SalesOverview() {
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             Compare
             <select value={comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 11 }}>
-              <option value="previous_period">Previous period</option>
+              <option value="previous_period" disabled={salesFirstDate !== null && !previousPeriodAvailable}>Previous period{salesFirstDate !== null && !previousPeriodAvailable ? ' (unavailable)' : ''}</option>
               <option value="previous_year" disabled={salesFirstDate !== null && !priorYearAvailable}>Previous year{salesFirstDate !== null && !priorYearAvailable ? ' (unavailable)' : ''}</option>
             </select>
           </label>
