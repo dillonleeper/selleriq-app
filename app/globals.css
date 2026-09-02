@@ -400,7 +400,7 @@ table tbody td {
 .overview-unlock-intro span, .overview-locked-kpi span { font-size: 9px; color: var(--text-dim); line-height: 1.35; }
 .overview-locked-kpi { border-left: 1px solid var(--border); }
 .overview-diagnostic-strip {
-  margin-top: 14px;
+  margin-top: 10px;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   background: var(--bg-card);
