@@ -116,26 +116,34 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
           color="var(--accent)"
         />
         <SummaryMetric
-          label="Buy Box ownership"
-          value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'}
-          detail={comparisonDetail(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')}
-          icon={<Boxes size={16} />}
-          color="var(--accent)"
+          label="Units ordered"
+          value={integer(metrics.units)}
+          detail={comparisonDetail(integer(metrics.priorUnits))}
+          icon={<ShoppingCart size={16} />}
+          color="var(--green)"
         />
         <SummaryMetric
-          label="Revenue refund rate"
-          value={metrics.revenueRefundRate === null ? '—' : `${metrics.revenueRefundRate.toFixed(2)}%`}
-          detail={metrics.financeKpisAvailable ? 'Refund dollars ÷ gross sales' : metrics.financeKpiUnavailableReason}
-          icon={<Percent size={16} />}
-          color="var(--red)"
-        />
-        <SummaryMetric
-          label="Amazon fee rate"
-          value={metrics.amazonFeeRate === null ? '—' : `${metrics.amazonFeeRate.toFixed(2)}%`}
-          detail={metrics.financeKpisAvailable ? 'Amazon fees ÷ gross sales' : metrics.financeKpiUnavailableReason}
-          icon={<Percent size={16} />}
+          label="Sessions"
+          value={integer(metrics.sessions)}
+          detail={comparisonDetail(integer(metrics.priorSessions))}
+          icon={<Eye size={16} />}
           color="var(--yellow)"
         />
+        <SummaryMetric
+          label="Conversion"
+          value={`${metrics.conversion.toFixed(2)}%`}
+          detail={comparisonDetail(`${metrics.priorConversion.toFixed(2)}%`)}
+          icon={<Percent size={16} />}
+          color="#EC4899"
+        />
+      </div>
+
+      <div className="overview-diagnostic-strip">
+        <Diagnostic label="Buy Box ownership" value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'} detail={comparisonDetail(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')} icon={<Boxes size={15} />} color="var(--accent)" />
+        <Diagnostic label="Revenue refund rate" value={metrics.revenueRefundRate === null ? '—' : `${metrics.revenueRefundRate.toFixed(2)}%`} detail={metrics.financeKpisAvailable ? 'Refund dollars ÷ gross sales' : metrics.financeKpiUnavailableReason} icon={<Percent size={15} />} color="var(--red)" />
+        <Diagnostic label="Fee Rate" value={metrics.amazonFeeRate === null ? '—' : `${metrics.amazonFeeRate.toFixed(2)}%`} detail={metrics.financeKpisAvailable ? 'Amazon fees ÷ gross sales' : metrics.financeKpiUnavailableReason} icon={<Percent size={15} />} color="var(--yellow)" />
+        <Diagnostic label="Avg. selling price" value={money(metrics.asp, 2)} detail={comparisonDetail(money(metrics.priorAsp, 2))} icon={<BarChart2 size={15} />} color="#6366F1" />
+        <Diagnostic label="Selling SKUs" value={integer(metrics.sellingSkus)} detail="Products with at least one unit" icon={<Boxes size={15} />} color="var(--accent)" />
       </div>
 
       <div className="overview-unlock-strip" aria-label="Metrics awaiting connected data">
@@ -149,20 +157,6 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
             <span>{item.reason}</span>
           </div>
         ))}
-      </div>
-
-      <div className="overview-section-heading demand-heading">
-        <div>
-          <h2>Demand health</h2>
-          <p>{integer(metrics.sellingSkus)} selling SKUs in this period</p>
-        </div>
-      </div>
-      <div className="overview-diagnostic-strip">
-        <Diagnostic label="Sessions" value={integer(metrics.sessions)} detail={comparisonDetail(integer(metrics.priorSessions))} icon={<Eye size={15} />} color="var(--yellow)" />
-        <Diagnostic label="Conversion" value={`${metrics.conversion.toFixed(2)}%`} detail={comparisonDetail(`${metrics.priorConversion.toFixed(2)}%`)} icon={<Percent size={15} />} color="#EC4899" />
-        <Diagnostic label="Avg. selling price" value={money(metrics.asp, 2)} detail={comparisonDetail(money(metrics.priorAsp, 2))} icon={<BarChart2 size={15} />} color="#6366F1" />
-        <Diagnostic label="Units ordered" value={integer(metrics.units)} detail={comparisonDetail(integer(metrics.priorUnits))} icon={<ShoppingCart size={15} />} color="var(--green)" />
-        <Diagnostic label="Selling SKUs" value={integer(metrics.sellingSkus)} detail="Products with at least one unit" icon={<Boxes size={15} />} color="var(--accent)" />
       </div>
     </section>
   )

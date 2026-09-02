@@ -358,7 +358,7 @@ table tbody td {
 }
 .overview-filter-bar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 .overview-search { position: relative; margin-bottom: 26px; }
-.overview-kpis { margin-bottom: 24px; }
+.overview-kpis { margin-bottom: 12px; }
 .overview-section-heading {
   display: flex;
   align-items: end;
@@ -399,8 +399,8 @@ table tbody td {
 .overview-unlock-intro strong, .overview-locked-kpi strong { font-size: 10px; }
 .overview-unlock-intro span, .overview-locked-kpi span { font-size: 9px; color: var(--text-dim); line-height: 1.35; }
 .overview-locked-kpi { border-left: 1px solid var(--border); }
-.demand-heading { margin-top: 25px; }
 .overview-diagnostic-strip {
+  margin-top: 14px;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   background: var(--bg-card);
@@ -814,8 +814,7 @@ html, body {
 .overview-unlock-intro strong, .overview-locked-kpi strong { font-weight: 590; }
 .overview-locked-kpi { border-left-color: var(--border); }
 
-/* Demand health is a compact diagnostic rail, visually subordinate. */
-.demand-heading { margin-top: 30px; }
+/* Secondary KPI rail: compact diagnostic strip, visually subordinate. */
 .overview-diagnostic-strip {
   border: 0;
   border-radius: 18px;
