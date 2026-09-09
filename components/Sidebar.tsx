@@ -6,7 +6,7 @@ import {
   BarChart2, Package, Boxes, GitCompare, TrendingUp,
   LogOut, CircleDollarSign, PanelLeftClose, PanelLeftOpen, X
 } from 'lucide-react'
-import { releaseFeatures, releaseLabel } from '@/lib/releaseConfig'
+import { releaseBrandName, releaseFeatures } from '@/lib/releaseConfig'
 
 const nav = [
   { href: '/', label: 'Sales Overview', icon: BarChart2 },
@@ -49,7 +49,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapsed, onCl
       <div className="sidebar-brand">
         <div className="sidebar-brand-lockup">
           <OrbitLogo />
-          <span className="sidebar-label sidebar-brand-name">SellerIQ · {releaseLabel}</span>
+          <span className="sidebar-label sidebar-brand-name">{releaseBrandName}</span>
         </div>
         <button type="button" className="sidebar-mobile-close" aria-label="Close navigation" onClick={onCloseMobile}>
           <X size={18} />

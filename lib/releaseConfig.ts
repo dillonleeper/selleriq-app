@@ -14,6 +14,8 @@ export const releaseFeatures = {
   supplierReorder: !isStableV2,
 } as const
 
-export const releaseLabel = isStableV2 ? 'Stable V2' : 'Daily Dev'
+export const releaseBrandName = isStableV2
+  ? 'Merkury Dashboard v2'
+  : 'SellerIQ · Daily Dev'
 
 export const disabledStableV2Paths = ['/profitability', '/traffic', '/compare'] as const
