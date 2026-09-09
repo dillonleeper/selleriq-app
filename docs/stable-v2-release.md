@@ -1,4 +1,4 @@
-# SellerIQ Stable V2
+# Merkury Dashboard v2
 
 Stable V2 is a frozen application release built from the daily-grain SellerIQ
 codebase. It reads the same daily warehouse as Daily Dev, so data refreshes and
@@ -17,6 +17,10 @@ Stable V2 disables these features:
 - Traffic & Conversion
 - Marketplace Compare
 - Supplier Reorder on the Inventory page
+- Recommended actions
+- Marketplace contribution
+- Profitability metrics pending
+- Financial reconciliation
 
 The three disabled routes are blocked by the Next.js proxy, so a direct URL
 redirects to Sales Overview. Supplier Reorder is excluded from the Inventory

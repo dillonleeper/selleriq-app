@@ -12,6 +12,10 @@ export const releaseFeatures = {
   trafficConversion: !isStableV2,
   marketplaceCompare: !isStableV2,
   supplierReorder: !isStableV2,
+  recommendedActions: !isStableV2,
+  marketplaceContribution: !isStableV2,
+  profitabilityPending: !isStableV2,
+  financialReconciliation: !isStableV2,
 } as const
 
 export const releaseBrandName = isStableV2

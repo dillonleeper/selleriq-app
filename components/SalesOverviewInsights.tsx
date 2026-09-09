@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
 import RecommendedActions from '@/components/RecommendedActions'
+import { releaseFeatures } from '@/lib/releaseConfig'
 
 export type SkuDriver = {
   sku: string
@@ -132,9 +133,11 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
 
   return (
     <div className="overview-story">
-      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
+      {releaseFeatures.recommendedActions && (
+        <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
+      )}
 
-      {marketDrivers.length > 0 && (
+      {releaseFeatures.marketplaceContribution && marketDrivers.length > 0 && (
         <section className="card overview-market-card" aria-labelledby="market-heading">
           <div id="market-heading" style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>Marketplace contribution</div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>{comparisonAvailable ? `Current revenue mix and change versus ${comparisonLabel}.` : 'Current revenue mix. Comparison change is unavailable for this range.'}</div>

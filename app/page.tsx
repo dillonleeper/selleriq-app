@@ -9,6 +9,7 @@ import SalesOverviewInsights, { InventoryRisk, MarketDriver, SkuDriver } from '@
 import ExecutiveBriefing from '@/components/ExecutiveBriefing'
 import SalesKpiHierarchy from '@/components/SalesKpiHierarchy'
 import { useProductSelection } from '@/components/ProductSelectionContext'
+import { releaseFeatures } from '@/lib/releaseConfig'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -969,6 +970,7 @@ export default function SalesOverview() {
           </details>
 
 
+          {releaseFeatures.financialReconciliation && <>
           {/* Settlement accounting is intentionally separated from ordered demand. */}
           <details className="overview-disclosure overview-finance-disclosure">
             <summary>
@@ -1061,6 +1063,7 @@ export default function SalesOverview() {
           </div>
             </div>
           </details>
+          </>}
         </>
       )}
     </div>

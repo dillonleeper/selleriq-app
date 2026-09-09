@@ -4,6 +4,7 @@ import {
   BarChart2, Boxes, DollarSign, Eye, LockKeyhole,
   Percent, ShoppingCart
 } from 'lucide-react'
+import { releaseFeatures } from '@/lib/releaseConfig'
 
 type Props = {
   rangeLabel: string
@@ -146,7 +147,7 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
         <Diagnostic label="Selling SKUs" value={integer(metrics.sellingSkus)} detail="Products with at least one unit" icon={<Boxes size={15} />} color="var(--accent)" />
       </div>
 
-      <div className="overview-unlock-strip" aria-label="Metrics awaiting connected data">
+      {releaseFeatures.profitabilityPending && <div className="overview-unlock-strip" aria-label="Metrics awaiting connected data">
         <div className="overview-unlock-intro">
           <LockKeyhole size={15} />
           <div><strong>Profitability metrics pending</strong><span>Connect Amazon Ads and landed product costs</span></div>
@@ -157,7 +158,7 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
             <span>{item.reason}</span>
           </div>
         ))}
-      </div>
+      </div>}
     </section>
   )
 }
