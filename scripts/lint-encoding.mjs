@@ -15,7 +15,7 @@
 // glyph here would make the linter flag itself and fail the build.
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 const EXTENSIONS = new Set([
@@ -68,16 +68,32 @@ function describe(seq) {
   return hint ? hint + ' (found ' + esc(seq) + ')' : 'unrecognized mojibake ' + esc(seq)
 }
 
-const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
+let root = process.cwd()
+let files
 
-const files = execFileSync('git', ['ls-files', '-z'], {
-  cwd: root,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-})
-  .split('\0')
-  .filter(Boolean)
-  .filter(f => EXTENSIONS.has(path.extname(f).toLowerCase()))
+try {
+  root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim()
+  files = execFileSync('git', ['ls-files', '-z'], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  }).split('\0').filter(Boolean)
+} catch {
+  // Vercel CLI source uploads do not include .git. Scan the uploaded source tree instead.
+  const ignored = new Set(['.git', '.next', '.vercel', 'node_modules'])
+  const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    if (ignored.has(entry.name)) return []
+    const absolute = path.join(dir, entry.name)
+    if (entry.isDirectory()) return walk(absolute)
+    return [path.relative(root, absolute)]
+  })
+  files = walk(root)
+}
+
+files = files.filter(f => EXTENSIONS.has(path.extname(f).toLowerCase()))
 
 const findings = []
 
