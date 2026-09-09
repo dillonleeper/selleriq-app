@@ -21,6 +21,7 @@ Stable V2 disables these features:
 - Marketplace contribution
 - Profitability metrics pending
 - Financial reconciliation
+- Sales diagnostic row (Buy Box, refund rate, fee rate, ASP, and selling SKUs)
 
 The three disabled routes are blocked by the Next.js proxy, so a direct URL
 redirects to Sales Overview. Supplier Reorder is excluded from the Inventory

@@ -16,6 +16,7 @@ export const releaseFeatures = {
   marketplaceContribution: !isStableV2,
   profitabilityPending: !isStableV2,
   financialReconciliation: !isStableV2,
+  salesDiagnosticStrip: !isStableV2,
 } as const
 
 export const releaseBrandName = isStableV2

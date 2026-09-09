@@ -139,13 +139,13 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
         />
       </div>
 
-      <div className="overview-diagnostic-strip">
+      {releaseFeatures.salesDiagnosticStrip && <div className="overview-diagnostic-strip">
         <Diagnostic label="Buy Box ownership" value={metrics.buyBox > 0 ? `${metrics.buyBox.toFixed(1)}%` : '—'} detail={comparisonDetail(metrics.priorBuyBox > 0 ? `${metrics.priorBuyBox.toFixed(1)}%` : '—')} icon={<Boxes size={15} />} color="var(--accent)" />
         <Diagnostic label="Revenue refund rate" value={metrics.revenueRefundRate === null ? '—' : `${metrics.revenueRefundRate.toFixed(2)}%`} detail={metrics.financeKpisAvailable ? 'Refund dollars ÷ gross sales' : metrics.financeKpiUnavailableReason} icon={<Percent size={15} />} color="var(--red)" />
         <Diagnostic label="Fee Rate" value={metrics.amazonFeeRate === null ? '—' : `${metrics.amazonFeeRate.toFixed(2)}%`} detail={metrics.financeKpisAvailable ? 'Amazon fees ÷ gross sales' : metrics.financeKpiUnavailableReason} icon={<Percent size={15} />} color="var(--yellow)" />
         <Diagnostic label="Avg. selling price" value={money(metrics.asp, 2)} detail={comparisonDetail(money(metrics.priorAsp, 2))} icon={<BarChart2 size={15} />} color="#6366F1" />
         <Diagnostic label="Selling SKUs" value={integer(metrics.sellingSkus)} detail="Products with at least one unit" icon={<Boxes size={15} />} color="var(--accent)" />
-      </div>
+      </div>}
 
       {releaseFeatures.profitabilityPending && <div className="overview-unlock-strip" aria-label="Metrics awaiting connected data">
         <div className="overview-unlock-intro">
