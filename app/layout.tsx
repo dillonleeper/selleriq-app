@@ -4,12 +4,13 @@ import { Analytics } from '@vercel/analytics/next'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import './globals.css'
 import AppShell from '@/components/AppShell'
+import { releaseLabel } from '@/lib/releaseConfig'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
 const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'SellerIQ',
+  title: `SellerIQ ${releaseLabel}`,
   description: 'Ecommerce Analytics Platform',
 }
 

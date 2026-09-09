@@ -6,15 +6,16 @@ import {
   BarChart2, Package, Boxes, GitCompare, TrendingUp,
   LogOut, CircleDollarSign, PanelLeftClose, PanelLeftOpen, X
 } from 'lucide-react'
+import { releaseFeatures, releaseLabel } from '@/lib/releaseConfig'
 
 const nav = [
   { href: '/', label: 'Sales Overview', icon: BarChart2 },
   { href: '/products', label: 'Product Performance', icon: Package },
-  { href: '/profitability', label: 'Profitability', icon: CircleDollarSign },
+  { href: '/profitability', label: 'Profitability', icon: CircleDollarSign, enabled: releaseFeatures.profitability },
   { href: '/inventory', label: 'Inventory', icon: Boxes },
-  { href: '/compare', label: 'Marketplace Compare', icon: GitCompare },
-  { href: '/traffic', label: 'Traffic & Conversion', icon: TrendingUp },
-]
+  { href: '/compare', label: 'Marketplace Compare', icon: GitCompare, enabled: releaseFeatures.marketplaceCompare },
+  { href: '/traffic', label: 'Traffic & Conversion', icon: TrendingUp, enabled: releaseFeatures.trafficConversion },
+].filter(item => item.enabled !== false)
 
 function OrbitLogo() {
   return (
@@ -48,7 +49,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggleCollapsed, onCl
       <div className="sidebar-brand">
         <div className="sidebar-brand-lockup">
           <OrbitLogo />
-          <span className="sidebar-label sidebar-brand-name">Merkury</span>
+          <span className="sidebar-label sidebar-brand-name">SellerIQ · {releaseLabel}</span>
         </div>
         <button type="button" className="sidebar-mobile-close" aria-label="Close navigation" onClick={onCloseMobile}>
           <X size={18} />

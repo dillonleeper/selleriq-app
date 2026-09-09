@@ -8,6 +8,7 @@ import DashboardState from '@/components/DashboardState'
 import { useProductSelection } from '@/components/ProductSelectionContext'
 import ContextualAction from '@/components/ContextualAction'
 import forecastStyles from './InventoryForecastPanel.module.css'
+import { releaseFeatures } from '@/lib/releaseConfig'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
   ArrowUp, ArrowUpDown, Search, Truck, Box, Send, ShoppingCart, Download, Upload,
@@ -728,7 +729,8 @@ export default function Inventory() {
     const marketplace = params.get('market')
     const requestedTab = params.get('tab')
     if (marketplace === 'US' || marketplace === 'CA') setMarkets([marketplace])
-    if (requestedTab === 'inventory' || requestedTab === 'fba' || requestedTab === 'supplier') setTab(requestedTab)
+    if (requestedTab === 'inventory' || requestedTab === 'fba') setTab(requestedTab)
+    if (requestedTab === 'supplier' && releaseFeatures.supplierReorder) setTab(requestedTab)
   }, [])
 
   useEffect(() => {
@@ -1339,7 +1341,9 @@ export default function Inventory() {
           { key: 'inventory', label: 'Inventory Snapshot', icon: <Package size={13} /> },
           { key: 'fba',       label: 'FBA Replenishment',  icon: <Truck size={13} /> },
           { key: 'supplier',  label: 'Supplier Reorder',   icon: <ShoppingCart size={13} /> },
-        ] as { key: TabType, label: string, icon: React.ReactNode }[]).map(t => (
+        ] as { key: TabType, label: string, icon: React.ReactNode }[])
+          .filter(t => t.key !== 'supplier' || releaseFeatures.supplierReorder)
+          .map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             display: 'flex', alignItems: 'center', gap: '6px',
             padding: '8px 20px', fontSize: '13px', fontWeight: 500,

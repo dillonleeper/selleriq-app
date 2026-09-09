@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
+import { disabledStableV2Paths, isStableV2 } from '@/lib/releaseConfig'
 
 /**
  * Authentication proxy (Next.js 16 — formerly middleware).
@@ -31,6 +32,12 @@ function verifySession(value: string, secret: string): boolean {
 }
 
 export async function proxy(request: NextRequest) {
+  if (isStableV2 && disabledStableV2Paths.some(path =>
+    request.nextUrl.pathname === path || request.nextUrl.pathname.startsWith(`${path}/`)
+  )) {
+    return NextResponse.redirect(new URL('/', request.url))
+  }
+
   const cookie = request.cookies.get('merkury_auth')
   const secret = process.env.AUTH_COOKIE_SECRET
 
