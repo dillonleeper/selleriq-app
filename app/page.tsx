@@ -87,6 +87,8 @@ type ChartPoint = {
   conv_rate: number
 }
 
+const SHOW_FINANCIAL_RECONCILIATION = false
+
 function fmt(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
@@ -632,7 +634,7 @@ export default function SalesOverview() {
           )}
         </div>
         <div className="overview-filter-bar">
-          <DateRangeFilter onChange={setDateRange} defaultPreset="last_7d" anchorDate={dataThrough} />
+          <DateRangeFilter onChange={setDateRange} defaultPreset="last_30d" anchorDate={dataThrough} />
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             Compare
             <select value={comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 11 }}>
@@ -958,7 +960,7 @@ export default function SalesOverview() {
 
 
           {/* Settlement accounting is intentionally separated from ordered demand. */}
-          <details className="overview-disclosure overview-finance-disclosure" style={{ marginBottom: 12 }}>
+          {SHOW_FINANCIAL_RECONCILIATION && <details className="overview-disclosure overview-finance-disclosure" style={{ marginBottom: 12 }}>
             <summary>
               <span><strong>Financial reconciliation</strong><small>Account-level settlement activity and source validation</small></span>
               <span className="overview-disclosure-action">View accounting</span>
@@ -1048,7 +1050,7 @@ export default function SalesOverview() {
             )}
           </div>
             </div>
-          </details>
+          </details>}
         </>
       )}
     </div>
