@@ -46,6 +46,7 @@ type Props = {
   comparisonLabel: string
   skuDrivers: SkuDriver[]
   marketDrivers: MarketDriver[]
+  marketplaceCount: number
   inventoryRisks: InventoryRisk[]
   inventoryError: boolean
   metrics: {
@@ -116,7 +117,7 @@ function effectClause(factor: Factor) {
   return factor.effect >= 0 ? `added ${money(factor.effect)}` : `reduced revenue by ${money(Math.abs(factor.effect))}`
 }
 
-export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, inventoryRisks, inventoryError, metrics }: Props) {
+export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, marketplaceCount, inventoryRisks, inventoryError, metrics }: Props) {
   const [driverView, setDriverView] = useState<'gains' | 'declines'>('gains')
   const positives = skuDrivers.filter(row => n(row.revenue_delta) > 0).sort((a, b) => n(b.revenue_delta) - n(a.revenue_delta)).slice(0, 5)
   const negatives = skuDrivers.filter(row => n(row.revenue_delta) < 0).sort((a, b) => n(a.revenue_delta) - n(b.revenue_delta)).slice(0, 5)
@@ -134,7 +135,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
     <div className="overview-story">
       <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
 
-      {marketDrivers.length > 0 && (
+      {marketplaceCount > 1 && marketDrivers.length > 1 && (
         <section className="card overview-market-card" aria-labelledby="market-heading">
           <div id="market-heading" style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>Marketplace contribution</div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>{comparisonAvailable ? `Current revenue mix and change versus ${comparisonLabel}.` : 'Current revenue mix. Comparison change is unavailable for this range.'}</div>

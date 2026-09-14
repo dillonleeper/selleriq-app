@@ -243,6 +243,8 @@ export default function SalesOverview() {
   const [dailySeries, setDailySeries] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
   const [chartBucket, setChartBucket] = useState<ChartBucket>('day')
+  const [showRevenue, setShowRevenue] = useState(true)
+  const [showUnits, setShowUnits] = useState(false)
   const [loading, setLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [retryToken, setRetryToken] = useState(0)
@@ -296,6 +298,14 @@ export default function SalesOverview() {
       setComparisonMode('previous_year')
     }
   }, [comparisonMode, priorYearAvailable, previousPeriodAvailable, salesFirstDate])
+
+  useEffect(() => {
+    if (!dateRange?.startDate || !dateRange.endDate) return
+    const start = new Date(`${dateRange.startDate}T12:00:00`)
+    const end = new Date(`${dateRange.endDate}T12:00:00`)
+    const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1
+    setChartBucket(days < 35 ? 'day' : days < 180 ? 'week' : 'month')
+  }, [dateRange?.startDate, dateRange?.endDate])
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -533,17 +543,6 @@ export default function SalesOverview() {
     : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
   const chartData = bucketed.complete
   const partialChartPoint = bucketed.partial
-  const priorBucketed = dateRange?.startDate && effectiveEnd
-    ? bucketSeries(prevData, chartBucket, comparisonWindow(dateRange.startDate, effectiveEnd, comparisonMode).priorStart, comparisonWindow(dateRange.startDate, effectiveEnd, comparisonMode).priorEnd)
-    : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
-  const priorByIndex = priorBucketed.complete
-  const comparisonChartData = chartData.map((point, index) => ({
-    ...point,
-    prior_revenue: priorByIndex[index]?.total_revenue,
-    prior_units: priorByIndex[index]?.total_units,
-    prior_sessions: priorByIndex[index]?.total_sessions,
-    prior_conv_rate: priorByIndex[index]?.conv_rate,
-  }))
   const bucketAdj = chartBucket === 'day' ? 'Daily' : chartBucket === 'week' ? 'Weekly' : 'Monthly'
 
   // ─── Total Sales Breakdown (finance settlement P&L, from get_finance_pnl) ───
@@ -811,7 +810,6 @@ export default function SalesOverview() {
           />
 
           <SalesKpiHierarchy
-            rangeLabel={rangeLabel}
             comparisonLabel={comparisonLabel}
             comparisonComplete={comparisonComplete && prevData.length > 0}
             metrics={{
@@ -833,33 +831,12 @@ export default function SalesOverview() {
             }}
           />
 
-          <SalesOverviewInsights
-            comparisonAvailable={comparisonComplete && prevData.length > 0}
-            comparisonLabel={comparisonLabel}
-            skuDrivers={skuDrivers}
-            marketDrivers={marketDrivers}
-            inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
-            metrics={{
-              revenue: totalRevenue, priorRevenue: prevRevenue,
-              units: totalUnits, priorUnits: prevUnits,
-              sessions: totalSessions, priorSessions: prevSessions,
-              conversion: convRate, priorConversion: prevConvRate,
-              asp, priorAsp: prevAsp,
-            }}
-          />
-
-          {/* Revenue + Units (dual-axis) with bucketing toggle */}
-          <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
+          {/* Revenue and units can be overlaid or isolated with the series controls. */}
+          <div className="card overview-sales-trend" style={{ padding: '24px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '18px' }}>
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                  <span>{bucketAdj} Revenue &amp; Units</span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: 'var(--chart-primary)' }} /> Revenue
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: 'var(--chart-success)' }} /> Units
-                  </span>
+                  <span>{bucketAdj} sales trend</span>
                   {selectedProducts.length > 0 && (
                     <span style={{ fontSize: '11px', color: 'var(--accent)' }}>
                       {selectedProducts.length} product{selectedProducts.length > 1 ? 's' : ''} selected
@@ -869,6 +846,10 @@ export default function SalesOverview() {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   USD · {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
                   {chartBucket !== 'day' && ' · trend uses complete calendar periods'}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                  <button type="button" aria-pressed={showRevenue} onClick={() => !(showRevenue && !showUnits) && setShowRevenue(value => !value)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 9px', borderRadius: 999, cursor: showRevenue && !showUnits ? 'default' : 'pointer', border: `1px solid ${showRevenue ? 'var(--accent-border)' : 'var(--border)'}`, background: showRevenue ? 'var(--accent-light)' : 'transparent', color: showRevenue ? 'var(--accent)' : 'var(--text-muted)', fontSize: 10, fontWeight: 600 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--chart-primary)' }} />Revenue</button>
+                  <button type="button" aria-pressed={showUnits} onClick={() => !(showUnits && !showRevenue) && setShowUnits(value => !value)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 9px', borderRadius: 999, cursor: showUnits && !showRevenue ? 'default' : 'pointer', border: `1px solid ${showUnits ? 'color-mix(in srgb, var(--chart-success) 35%, var(--border))' : 'var(--border)'}`, background: showUnits ? 'color-mix(in srgb, var(--chart-success) 10%, transparent)' : 'transparent', color: showUnits ? 'var(--chart-success)' : 'var(--text-muted)', fontSize: 10, fontWeight: 600 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--chart-success)' }} />Units</button>
                 </div>
               </div>
               {/* Chart-only bucketing control */}
@@ -891,8 +872,8 @@ export default function SalesOverview() {
                 <strong style={{ color: 'var(--text-primary)' }}>{fmtUnits(partialChartPoint.total_units)}</strong> units. Kept out of the full-period trend.
               </div>
             )}
-            <ResponsiveContainer width="100%" height={240}>
-              <ComposedChart data={comparisonChartData}>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={chartData}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
@@ -901,31 +882,25 @@ export default function SalesOverview() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="rev" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />
-                <YAxis yAxisId="units" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
+                {showRevenue && <YAxis yAxisId="revenue" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />}
+                {showUnits && <YAxis yAxisId="units" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />}
                 <Tooltip content={<CustomTooltip />} />
-                <Area yAxisId="rev" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.5} fill="url(#revGrad)" dot={false} />
-                <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={1.5} dot={false} />
-                {comparisonComplete && <Line yAxisId="rev" type="monotone" dataKey="prior_revenue" name={`Revenue (${comparisonLabel})`} stroke="var(--text-dim)" strokeWidth={1.2} strokeDasharray="5 4" dot={false} />}
+                {showRevenue && <Area yAxisId="revenue" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.75} fill="url(#revGrad)" dot={false} />}
+                {showUnits && <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
 
           {/* Sessions + Conversion rate over time */}
-          <details className="overview-disclosure">
-            <summary>
-              <span><strong>Explore demand drivers</strong><small>Sessions and conversion trends</small></span>
-              <span className="overview-disclosure-action">View charts</span>
-            </summary>
-            <div className="overview-disclosure-body">
-          <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
+          <section aria-label="Demand driver charts">
+          <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <div className="card" style={{ padding: '24px' }}>
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Sessions over time</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} · all selected marketplaces combined</div>
               </div>
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={comparisonChartData}>
+                <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="sessGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="var(--yellow)" stopOpacity={0.9} />
@@ -937,7 +912,6 @@ export default function SalesOverview() {
                   <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />
                   <Tooltip content={<CustomTooltip />} />
                   <Area type="monotone" dataKey="total_sessions" name="Sessions" stroke="var(--yellow)" strokeWidth={1.5} fill="url(#sessGrad)" dot={false} />
-                  {comparisonComplete && <Line type="monotone" dataKey="prior_sessions" name={`Sessions (${comparisonLabel})`} stroke="var(--text-dim)" strokeDasharray="5 4" dot={false} />}
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -948,7 +922,7 @@ export default function SalesOverview() {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bucketAdj} · units ÷ sessions</div>
               </div>
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={comparisonChartData}>
+                <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="convGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#EC4899" stopOpacity={0.9} />
@@ -960,13 +934,27 @@ export default function SalesOverview() {
                   <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.toFixed(1) + '%'} width={50} />
                   <Tooltip content={<CustomTooltip />} />
                   <Area type="monotone" dataKey="conv_rate" name="Conversion Rate" stroke="#EC4899" strokeWidth={1.5} fill="url(#convGrad)" dot={false} />
-                  {comparisonComplete && <Line type="monotone" dataKey="prior_conv_rate" name={`Conversion Rate (${comparisonLabel})`} stroke="var(--text-dim)" strokeDasharray="5 4" dot={false} />}
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
-            </div>
-          </details>
+          </section>
+
+          <SalesOverviewInsights
+            comparisonAvailable={comparisonComplete && prevData.length > 0}
+            comparisonLabel={comparisonLabel}
+            skuDrivers={skuDrivers}
+            marketDrivers={marketDrivers}
+            marketplaceCount={markets.length}
+            inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
+            metrics={{
+              revenue: totalRevenue, priorRevenue: prevRevenue,
+              units: totalUnits, priorUnits: prevUnits,
+              sessions: totalSessions, priorSessions: prevSessions,
+              conversion: convRate, priorConversion: prevConvRate,
+              asp, priorAsp: prevAsp,
+            }}
+          />
 
 
           {/* Settlement accounting is intentionally separated from ordered demand. */}
