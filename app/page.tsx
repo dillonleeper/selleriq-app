@@ -533,9 +533,6 @@ export default function SalesOverview() {
   // nothing can be done. Days at or after it that are still absent mean a marketplace
   // genuinely has not loaded, which is worth chasing (see the stranded-preliminary dates
   // the nightly catch-up sweep now clears).
-  const missingBeforeHistory = salesFirstDate
-    ? missingCurrentDates.filter(date => date < salesFirstDate)
-    : []
   const missingWithinHistory = salesFirstDate
     ? missingCurrentDates.filter(date => date >= salesFirstDate)
     : missingCurrentDates
@@ -583,6 +580,17 @@ export default function SalesOverview() {
   ] : []
 
   const comparisonLabel = comparisonMode === 'previous_year' ? 'previous year' : 'previous period'
+  const displayedRangeStart = dateRange?.startDate
+    ? (salesFirstDate && dateRange.startDate < salesFirstDate ? salesFirstDate : dateRange.startDate)
+    : ''
+  const displayedRangeEnd = effectiveEnd
+  const freshestMarketDate = marketFreshness.reduce<string | null>((latest, row) => {
+    if (!row.data_through) return latest
+    return !latest || row.data_through > latest ? row.data_through : latest
+  }, null)
+  const staleMarkets = freshestMarketDate
+    ? marketFreshness.filter(row => !row.data_through || row.data_through < freshestMarketDate)
+    : []
 
   const truncate = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + '…' : s
 
@@ -591,53 +599,19 @@ export default function SalesOverview() {
       {/* Header */}
       <div className="overview-page-header" style={{ marginBottom: 12 }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Sales Overview</h1>
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            All revenue in USD
-            {' · '}
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>
-              {dateRange && dateRange.startDate
-                ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}`
-                : 'Select a date range'}
-            </span>
-            {dataThrough && (
-              <span style={{ marginLeft: 10, color: dataThrough < (dateRange?.endDate || dataThrough) ? 'var(--amber)' : 'var(--text-dim)' }}>
-                Data through {fmtDateLabel(dataThrough)}
-              </span>
-            )}
-            {marketFreshness.length > 1 && (
-              <span title={marketFreshness.map(row => `${row.marketplace}: ${row.data_through ? fmtDateLabel(row.data_through) : 'unavailable'}`).join('\n')} style={{ marginLeft: 10, color: 'var(--text-dim)', cursor: 'help' }}>
-                Marketplace freshness ⓘ
-              </span>
-            )}
-          </p>
-          {/* Three genuinely different situations, previously all reported as "marketplaces
-              have not loaded" -- which was false for every one of the presets that were
-              actually failing, and sent the diagnosis after the wrong cause. */}
-          {!loading && comparisonImpossible && (
-            <div className="overview-data-warning">
-              {`No comparable earlier period. This range reaches back to ${salesFirstDate ? fmtDateLabel(salesFirstDate) : 'your earliest data'}, so there is nothing before it to compare against. The figures below are complete; the comparison line and change indicators are hidden.`}
-            </div>
-          )}
-          {!loading && missingBeforeHistory.length > 0 && (
-            <div className="overview-data-warning">
-              {`${missingBeforeHistory.length} day${missingBeforeHistory.length === 1 ? '' : 's'} in this range predate${missingBeforeHistory.length === 1 ? 's' : ''} your first recorded data${salesFirstDate ? ` (${fmtDateLabel(salesFirstDate)})` : ''} and cannot be shown: ${summariseDates(missingBeforeHistory)}`}
-            </div>
-          )}
-          {!loading && missingWithinHistory.length > 0 && (
-            <div className="overview-data-warning">
-              {/* Covers both remaining causes: the day itself is short a marketplace, or
-                  the day it is compared against is. Worded to be true of either, since
-                  the series alone cannot tell us which side is short. */}
-              {`${missingWithinHistory.length} day${missingWithinHistory.length === 1 ? '' : 's'} excluded because not every selected marketplace has loaded data for ${missingWithinHistory.length === 1 ? 'it' : 'them'}, or for the ${missingWithinHistory.length === 1 ? 'day it is' : 'days they are'} compared against: ${summariseDates(missingWithinHistory)}`}
-            </div>
-          )}
+          <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px' }}>Sales Overview</h1>
         </div>
         <div className="overview-filter-bar">
+          <span style={{ color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>
+            {displayedRangeStart && displayedRangeEnd
+              ? `${fmtDateLabel(displayedRangeStart)} — ${fmtDateLabel(displayedRangeEnd)}`
+              : 'Select a date range'}
+          </span>
           <DateRangeFilter onChange={setDateRange} defaultPreset="last_30d" anchorDate={dataThrough} />
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             Compare
-            <select value={comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 11 }}>
+            <select disabled={comparisonImpossible} value={comparisonImpossible ? 'unavailable' : comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: comparisonImpossible ? 'var(--text-dim)' : 'var(--text-primary)', fontSize: 11 }}>
+              {comparisonImpossible && <option value="unavailable">No earlier period</option>}
               <option value="previous_period" disabled={salesFirstDate !== null && !previousPeriodAvailable}>Previous period{salesFirstDate !== null && !previousPeriodAvailable ? ' (unavailable)' : ''}</option>
               <option value="previous_year" disabled={salesFirstDate !== null && !priorYearAvailable}>Previous year{salesFirstDate !== null && !priorYearAvailable ? ' (unavailable)' : ''}</option>
             </select>
@@ -645,6 +619,18 @@ export default function SalesOverview() {
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
         </div>
       </div>
+
+      {!loading && staleMarkets.length > 0 && (
+        <div className="overview-data-warning" style={{ marginBottom: 12 }}>
+          {`${staleMarkets.map(row => row.marketplace).join(', ')} data is behind the latest selected marketplace${freshestMarketDate ? ` (${fmtDateLabel(freshestMarketDate)})` : ''}.`}
+        </div>
+      )}
+
+      {!loading && missingWithinHistory.length > 0 && (
+        <div className="overview-data-warning" style={{ marginBottom: 12 }}>
+          {`${missingWithinHistory.length} date${missingWithinHistory.length === 1 ? '' : 's'} within your recorded history ${missingWithinHistory.length === 1 ? 'is' : 'are'} incomplete: ${summariseDates(missingWithinHistory)}`}
+        </div>
+      )}
 
       {/* Search Bar */}
       <div ref={searchRef} className="overview-search" style={{ marginBottom: 12 }}>
