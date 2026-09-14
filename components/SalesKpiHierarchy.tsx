@@ -2,14 +2,16 @@
 
 import {
   BarChart2, Boxes, DollarSign, Eye, LockKeyhole,
-  Percent, ShoppingCart
+  CheckCircle2, Percent, ShoppingCart
 } from 'lucide-react'
+
+export type ChartSeries = 'revenue' | 'units' | 'sessions' | 'conversion'
 
 type Props = {
   comparisonLabel: string
   comparisonComplete: boolean
-  activeSeries: 'revenue' | 'units'
-  onSeriesSelect: (series: 'revenue' | 'units') => void
+  activeSeries: ChartSeries[]
+  onSeriesToggle: (series: ChartSeries) => void
   metrics: {
     revenue: number
     priorRevenue: number
@@ -47,22 +49,26 @@ type SummaryMetricProps = {
   delta?: number | null
   onClick?: () => void
   active?: boolean
+  locked?: boolean
 }
 
-function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick, active }: SummaryMetricProps) {
+function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick, active, locked }: SummaryMetricProps) {
+  const interactiveClick = locked ? undefined : onClick
   return (
     <div
       className={`overview-summary-metric ${hero ? 'is-hero' : ''}`}
       role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
+      tabIndex={interactiveClick ? 0 : undefined}
       aria-pressed={onClick ? active : undefined}
-      onClick={onClick}
-      onKeyDown={onClick ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } } : undefined}
-      style={{ cursor: onClick ? 'pointer' : 'default', boxShadow: active ? `inset 0 -3px 0 ${color}` : undefined }}
+      aria-disabled={locked || undefined}
+      title={locked ? 'Deselect a metric before adding another' : active ? `Remove ${label} from chart` : `Add ${label} to chart`}
+      onClick={interactiveClick}
+      onKeyDown={interactiveClick ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); interactiveClick() } } : undefined}
+      style={{ cursor: locked ? 'not-allowed' : onClick ? 'pointer' : 'default', opacity: locked ? 0.5 : 1, boxShadow: active ? `inset 0 0 0 2px ${color}` : undefined, transition: 'opacity .15s ease, box-shadow .15s ease' }}
     >
       <div className="overview-metric-heading">
         <span>{label}</span>
-        <span style={{ color }}>{icon}</span>
+        <span style={{ color, display: 'flex', alignItems: 'center', gap: 5 }}>{active && <><CheckCircle2 size={12} /><small style={{ fontSize: 8, fontWeight: 700 }}>CHARTED</small></>}{icon}</span>
       </div>
       <div className="overview-metric-value">{value}</div>
       <div className="overview-metric-detail">
@@ -100,7 +106,7 @@ function Diagnostic({ label, value, detail, icon, color }: DiagnosticProps) {
   )
 }
 
-export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete, activeSeries, onSeriesSelect, metrics }: Props) {
+export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete, activeSeries, onSeriesToggle, metrics }: Props) {
   const comparisonDetail = (priorValue: string) => comparisonComplete ? `${priorValue} ${comparisonLabel}` : ''
 
   const lockedItems = [
@@ -111,6 +117,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
 
   return (
     <section className="overview-kpis" aria-label="Sales KPIs" style={{ marginBottom: 12 }}>
+      <div style={{ margin: '0 0 6px 4px', color: 'var(--text-muted)', fontSize: 10 }}>Choose up to two KPIs to chart</div>
       <div className="overview-summary-panel">
         <SummaryMetric
           hero
@@ -118,8 +125,9 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           value={money(metrics.revenue)}
           detail={comparisonDetail(money(metrics.priorRevenue))}
           delta={comparisonComplete ? relativeDelta(metrics.revenue, metrics.priorRevenue) : null}
-          onClick={() => onSeriesSelect('revenue')}
-          active={activeSeries === 'revenue'}
+          onClick={() => onSeriesToggle('revenue')}
+          active={activeSeries.includes('revenue')}
+          locked={activeSeries.length >= 2 && !activeSeries.includes('revenue')}
           icon={<DollarSign size={16} />}
           color="var(--accent)"
         />
@@ -128,8 +136,9 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           value={integer(metrics.units)}
           detail={comparisonDetail(integer(metrics.priorUnits))}
           delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null}
-          onClick={() => onSeriesSelect('units')}
-          active={activeSeries === 'units'}
+          onClick={() => onSeriesToggle('units')}
+          active={activeSeries.includes('units')}
+          locked={activeSeries.length >= 2 && !activeSeries.includes('units')}
           icon={<ShoppingCart size={16} />}
           color="var(--green)"
         />
@@ -138,6 +147,9 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           value={integer(metrics.sessions)}
           detail={comparisonDetail(integer(metrics.priorSessions))}
           delta={comparisonComplete ? relativeDelta(metrics.sessions, metrics.priorSessions) : null}
+          onClick={() => onSeriesToggle('sessions')}
+          active={activeSeries.includes('sessions')}
+          locked={activeSeries.length >= 2 && !activeSeries.includes('sessions')}
           icon={<Eye size={16} />}
           color="var(--yellow)"
         />
@@ -146,6 +158,9 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           value={`${metrics.conversion.toFixed(2)}%`}
           detail={comparisonDetail(`${metrics.priorConversion.toFixed(2)}%`)}
           delta={comparisonComplete && metrics.priorConversion > 0 ? relativeDelta(metrics.conversion, metrics.priorConversion) : null}
+          onClick={() => onSeriesToggle('conversion')}
+          active={activeSeries.includes('conversion')}
+          locked={activeSeries.length >= 2 && !activeSeries.includes('conversion')}
           icon={<Percent size={16} />}
           color="#EC4899"
         />
