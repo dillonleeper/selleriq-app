@@ -53,7 +53,7 @@ export default function ExecutiveBriefing({ comparisonAvailable, comparisonLabel
 
   if (!comparisonAvailable || revenueChange === null) {
     return (
-      <section className="overview-briefing" aria-labelledby="briefing-heading">
+      <section className="overview-briefing" aria-labelledby="briefing-heading" style={{ marginBottom: 12 }}>
         <div className="overview-eyebrow">Executive briefing</div>
         <h2 id="briefing-heading">{money(metrics.revenue)} in revenue across {metrics.units.toLocaleString('en-US')} units.</h2>
         <p>A complete {comparisonLabel} is not available, so SellerIQ is showing current account performance without labeling movement as good or bad.</p>
@@ -74,7 +74,7 @@ export default function ExecutiveBriefing({ comparisonAvailable, comparisonLabel
   const story = [supporting.length ? `${supporting.join('; ')}.` : '', marketContext].filter(Boolean).join(' ')
 
   return (
-    <section className="overview-briefing" aria-labelledby="briefing-heading">
+    <section className="overview-briefing" aria-labelledby="briefing-heading" style={{ marginBottom: 12 }}>
       <div className="overview-eyebrow">Executive briefing</div>
       <h2 id="briefing-heading">{title}</h2>
       <p>{story || `${money(metrics.revenue)} in revenue across ${metrics.units.toLocaleString('en-US')} units.`}</p>

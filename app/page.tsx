@@ -587,7 +587,7 @@ export default function SalesOverview() {
   return (
     <div className="sales-overview-page">
       {/* Header */}
-      <div className="overview-page-header">
+      <div className="overview-page-header" style={{ marginBottom: 12 }}>
         <div>
           <h1 style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.4px', marginBottom: '4px' }}>Sales Overview</h1>
           <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
@@ -645,7 +645,7 @@ export default function SalesOverview() {
       </div>
 
       {/* Search Bar */}
-      <div ref={searchRef} className="overview-search">
+      <div ref={searchRef} className="overview-search" style={{ marginBottom: 12 }}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: '10px',
           background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -832,7 +832,7 @@ export default function SalesOverview() {
           />
 
           {/* Revenue and units can be overlaid or isolated with the series controls. */}
-          <div className="card overview-sales-trend" style={{ padding: '24px' }}>
+          <div className="card overview-sales-trend" style={{ padding: '24px', marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '18px' }}>
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
@@ -893,7 +893,7 @@ export default function SalesOverview() {
 
           {/* Sessions + Conversion rate over time */}
           <section aria-label="Demand driver charts">
-          <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: 12 }}>
             <div className="card" style={{ padding: '24px' }}>
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '2px' }}>Sessions over time</div>
@@ -958,7 +958,7 @@ export default function SalesOverview() {
 
 
           {/* Settlement accounting is intentionally separated from ordered demand. */}
-          <details className="overview-disclosure overview-finance-disclosure">
+          <details className="overview-disclosure overview-finance-disclosure" style={{ marginBottom: 12 }}>
             <summary>
               <span><strong>Financial reconciliation</strong><small>Account-level settlement activity and source validation</small></span>
               <span className="overview-disclosure-action">View accounting</span>

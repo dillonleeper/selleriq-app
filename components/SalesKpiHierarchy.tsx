@@ -95,7 +95,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
   ]
 
   return (
-    <section className="overview-kpis" aria-label="Sales KPIs">
+    <section className="overview-kpis" aria-label="Sales KPIs" style={{ marginBottom: 12 }}>
       <div className="overview-summary-panel">
         <SummaryMetric
           hero

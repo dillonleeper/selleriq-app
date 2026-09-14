@@ -132,11 +132,11 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
     : `A complete ${comparisonLabel} is not available for this selection, so change attribution is intentionally withheld.`
 
   return (
-    <div className="overview-story">
+    <div className="overview-story" style={{ gap: 12, marginBottom: 12 }}>
       <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
 
       {marketplaceCount > 1 && marketDrivers.length > 1 && (
-        <section className="card overview-market-card" aria-labelledby="market-heading">
+        <section className="card overview-market-card" aria-labelledby="market-heading" style={{ order: 3 }}>
           <div id="market-heading" style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>Marketplace contribution</div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>{comparisonAvailable ? `Current revenue mix and change versus ${comparisonLabel}.` : 'Current revenue mix. Comparison change is unavailable for this range.'}</div>
           {marketDrivers.map((row, index) => {
@@ -161,7 +161,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         const color = driverView === 'gains' ? 'var(--green)' : 'var(--red)'
         const Icon = driverView === 'gains' ? ArrowUpRight : ArrowDownRight
         return (
-          <section className="card overview-driver-panel" aria-labelledby="product-drivers-heading">
+          <section className="card overview-driver-panel" aria-labelledby="product-drivers-heading" style={{ order: 2 }}>
             <div className="overview-driver-header">
               <div>
                 <div id="product-drivers-heading" style={{ fontSize: 13, fontWeight: 600 }}>Product drivers</div>
