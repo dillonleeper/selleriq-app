@@ -244,6 +244,8 @@ export default function SalesOverview() {
   const [dailySeries, setDailySeries] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
   const [chartBucket, setChartBucket] = useState<ChartBucket>('day')
+  const [showRevenue, setShowRevenue] = useState(true)
+  const [showUnits, setShowUnits] = useState(false)
   const [loading, setLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [retryToken, setRetryToken] = useState(0)
@@ -809,7 +811,6 @@ export default function SalesOverview() {
           />
 
           <SalesKpiHierarchy
-            rangeLabel={rangeLabel}
             comparisonLabel={comparisonLabel}
             comparisonComplete={comparisonComplete && prevData.length > 0}
             metrics={{
@@ -831,7 +832,7 @@ export default function SalesOverview() {
             }}
           />
 
-          {/* Revenue and units share dates but use separate charts so unlike scales do not compete. */}
+          {/* Revenue and units can be overlaid or isolated with the series controls. */}
           <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '18px' }}>
               <div>
@@ -846,6 +847,24 @@ export default function SalesOverview() {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   USD · {dateRange && dateRange.startDate ? `${fmtDateLabel(dateRange.startDate)} — ${fmtDateLabel(dateRange.endDate)}` : rangeLabel}
                   {chartBucket !== 'day' && ' · trend uses complete calendar periods'}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                  <button
+                    type="button"
+                    aria-pressed={showRevenue}
+                    onClick={() => !(showRevenue && !showUnits) && setShowRevenue(value => !value)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 9px', borderRadius: 999, cursor: showRevenue && !showUnits ? 'default' : 'pointer', border: `1px solid ${showRevenue ? 'var(--accent-border)' : 'var(--border)'}`, background: showRevenue ? 'var(--accent-light)' : 'transparent', color: showRevenue ? 'var(--accent)' : 'var(--text-muted)', fontSize: 10, fontWeight: 600 }}
+                  >
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--chart-primary)' }} />Revenue
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={showUnits}
+                    onClick={() => !(showUnits && !showRevenue) && setShowUnits(value => !value)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 9px', borderRadius: 999, cursor: showUnits && !showRevenue ? 'default' : 'pointer', border: `1px solid ${showUnits ? 'color-mix(in srgb, var(--chart-success) 35%, var(--border))' : 'var(--border)'}`, background: showUnits ? 'color-mix(in srgb, var(--chart-success) 10%, transparent)' : 'transparent', color: showUnits ? 'var(--chart-success)' : 'var(--text-muted)', fontSize: 10, fontWeight: 600 }}
+                  >
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--chart-success)' }} />Units
+                  </button>
                 </div>
               </div>
               {/* Chart-only bucketing control */}
@@ -868,9 +887,8 @@ export default function SalesOverview() {
                 <strong style={{ color: 'var(--text-primary)' }}>{fmtUnits(partialChartPoint.total_units)}</strong> units. Kept out of the full-period trend.
               </div>
             )}
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>Revenue</div>
-            <ResponsiveContainer width="100%" height={215}>
-              <AreaChart data={chartData}>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={chartData}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
@@ -879,22 +897,13 @@ export default function SalesOverview() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />
+                {showRevenue && <YAxis yAxisId="revenue" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => '$' + fmt(v)} width={60} />}
+                {showUnits && <YAxis yAxisId="units" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={50} />}
                 <Tooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.75} fill="url(#revGrad)" dot={false} />
-              </AreaChart>
+                {showRevenue && <Area yAxisId="revenue" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.75} fill="url(#revGrad)" dot={false} />}
+                {showUnits && <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />}
+              </ComposedChart>
             </ResponsiveContainer>
-            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>Units ordered</div>
-              <ResponsiveContainer width="100%" height={105}>
-                <ComposedChart data={chartData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-                  <XAxis dataKey="label" hide />
-                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={60} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Line type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
           </div>
 
           {/* Sessions + Conversion rate over time */}

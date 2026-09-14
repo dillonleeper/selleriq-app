@@ -7,7 +7,6 @@ import {
 import { releaseFeatures } from '@/lib/releaseConfig'
 
 type Props = {
-  rangeLabel: string
   comparisonLabel: string
   comparisonComplete: boolean
   metrics: {
@@ -87,7 +86,7 @@ function Diagnostic({ label, value, detail, icon, color }: DiagnosticProps) {
   )
 }
 
-export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, comparisonComplete, metrics }: Props) {
+export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete, metrics }: Props) {
   const comparisonDetail = (priorValue: string) => comparisonComplete ? `${priorValue} ${comparisonLabel}` : ''
 
   const lockedItems = [
@@ -97,15 +96,7 @@ export default function SalesKpiHierarchy({ rangeLabel, comparisonLabel, compari
   ]
 
   return (
-    <section className="overview-kpis" aria-labelledby="business-outcomes-heading">
-      <div className="overview-section-heading">
-        <div>
-          <h2 id="business-outcomes-heading">Business outcomes</h2>
-          <p>Primary KPIs · {rangeLabel}</p>
-        </div>
-        <span>{comparisonComplete ? `Compared with ${comparisonLabel}` : 'Current period · comparison unavailable'}</span>
-      </div>
-
+    <section className="overview-kpis" aria-label="Sales KPIs">
       <div className="overview-summary-panel">
         <SummaryMetric
           hero
