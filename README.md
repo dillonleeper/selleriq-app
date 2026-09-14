@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SellerIQ App
 
-## Getting Started
+This is the dashboard side of SellerIQ, an ecommerce analytics project I'm building from reporting problems I've run into at work. I'm using it to explore sales, traffic, profitability, and inventory data in one place.
 
-First, run the development server:
+The related [SellerIQ repository](https://github.com/dillonleeper/SellerIQ) contains the Python ingestion scripts and warehouse SQL. The [site repository](https://github.com/dillonleeper/selleriq-site) contains the public introduction and waitlist.
+
+## What's here
+
+- Sales overview and period comparisons for the US and Canada.
+- Product and traffic views for exploring changes by SKU and marketplace.
+- Profitability views with data-completeness and reconciliation checks.
+- Inventory coverage, forecasting, and reorder planning views.
+- A password login and server routes for landed-cost data.
+
+The app uses Next.js, React, TypeScript, Recharts, and Supabase/PostgreSQL. The default branch is `daily-dev`; this is ongoing work, and the calculations and views depend on the database behind it.
+
+## Local setup
+
+```bash
+npm ci
+```
+
+Create a local `.env.local` with these variables:
+
+| Variable | Used for |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser client key |
+| `AUTH_PASSWORD` | App login password |
+| `AUTH_COOKIE_SECRET` | Signing the app's session cookie |
+| `SUPABASE_SECRET_KEY` | Server-side database access for landed-cost routes |
+
+Keep the password, cookie secret, and Supabase secret key on the server. Do not put them in a `NEXT_PUBLIC_` variable or commit `.env.local`.
+
+The app expects existing marketplace data, tables, views, and RPC functions. `supabase/migrations/` contains database changes, but this repository is not a self-contained demo with a sample database. Review the SQL and its dependencies against your own database before applying it.
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [localhost:3000](http://localhost:3000). Without the expected database and configuration, the dashboard cannot load its data.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Development commands
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `npm run lint` — ESLint checks.
+- `npm run lint:encoding` — text-encoding checks.
+- `npm run build` — encoding checks followed by the Next.js build.
+- `npm start` — serve a completed build.
 
-## Learn More
+## Notes
 
-To learn more about Next.js, take a look at the following resources:
+[`docs/multi_warehouse_notes.md`](docs/multi_warehouse_notes.md) is a backlog design note written for the weekly stable version. Its code anchors describe that version, so check the current implementation before using it as a guide.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The public code does not include the business dataset. The browser key and login screen are not substitutes for database permissions; access also depends on the configured grants, policies, and RPC functions.
