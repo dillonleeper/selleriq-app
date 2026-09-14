@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { searchProducts } from '@/lib/productSearch'
 import MarketplaceFilter from '@/components/MarketplaceFilter'
-import DateRangeFilter, { DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
+import DateRangeFilter, { type DatePreset, DateRange, PRESET_LABELS } from '@/components/DateRangeFilter'
 import SalesOverviewInsights, { InventoryRisk, MarketDriver, SkuDriver } from '@/components/SalesOverviewInsights'
 import ExecutiveBriefing from '@/components/ExecutiveBriefing'
 import SalesKpiHierarchy from '@/components/SalesKpiHierarchy'
@@ -12,7 +12,7 @@ import { useProductSelection } from '@/components/ProductSelectionContext'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
-  ComposedChart, AreaChart, Line
+  ComposedChart, AreaChart, Line, ReferenceDot
 } from 'recharts'
 import { LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
 
@@ -241,6 +241,8 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export default function SalesOverview() {
   const [markets, setMarkets] = useState(['US', 'CA'])
+  const [initialPreset, setInitialPreset] = useState<DatePreset>('last_30d')
+  const [urlStateReady, setUrlStateReady] = useState(false)
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [dailySeries, setDailySeries] = useState<WeeklyRow[]>([])
   const [prevData, setPrevData] = useState<WeeklyRow[]>([])
@@ -265,6 +267,34 @@ export default function SalesOverview() {
   // Whether the last get_finance_pnl call errored (e.g. timeout). Kept separate
   // from an empty result so a failed fetch isn't rendered as "no data exists".
   const [financeError, setFinanceError] = useState(false)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const requestedPreset = params.get('range') as DatePreset | null
+    const supportedPresets: DatePreset[] = ['last_7d', 'last_30d', 'last_90d', 'last_365d', 'last_week', 'last_month', 'last_quarter', 'last_12m', 'last_year', 'wtd', 'mtd', 'qtd', 'ytd']
+    if (requestedPreset && supportedPresets.includes(requestedPreset)) setInitialPreset(requestedPreset)
+    const requestedCompare = params.get('compare')
+    if (requestedCompare === 'previous_period' || requestedCompare === 'previous_year') setComparisonMode(requestedCompare)
+    const requestedMarkets = (params.get('markets') || '').split(',').filter(market => market === 'US' || market === 'CA')
+    if (requestedMarkets.length) setMarkets([...new Set(requestedMarkets)])
+    const requestedSeries = (params.get('series') || '').split(',')
+    if (requestedSeries.includes('units') && !requestedSeries.includes('revenue')) {
+      setShowRevenue(false); setShowUnits(true)
+    } else if (requestedSeries.includes('units')) {
+      setShowRevenue(true); setShowUnits(true)
+    }
+    setUrlStateReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!urlStateReady || !dateRange || dateRange.preset !== initialPreset) return
+    const url = new URL(window.location.href)
+    url.searchParams.set('range', dateRange.preset)
+    url.searchParams.set('compare', comparisonMode)
+    url.searchParams.set('markets', markets.join(','))
+    url.searchParams.set('series', [showRevenue ? 'revenue' : '', showUnits ? 'units' : ''].filter(Boolean).join(','))
+    window.history.replaceState(null, '', url)
+  }, [urlStateReady, initialPreset, dateRange, comparisonMode, markets, showRevenue, showUnits])
 
   // Whether the prior window a given comparison mode would actually request falls inside
   // the data we hold. This used to check previous_year only, which missed the mode that
@@ -542,6 +572,10 @@ export default function SalesOverview() {
     : { complete: [] as ChartPoint[], partial: null as ChartPoint | null }
   const chartData = bucketed.complete
   const partialChartPoint = bucketed.partial
+  const sortedRevenue = chartData.map(point => point.total_revenue).sort((a, b) => a - b)
+  const medianRevenue = sortedRevenue.length ? sortedRevenue[Math.floor(sortedRevenue.length / 2)] : 0
+  const peakPoint = chartData.reduce<ChartPoint | null>((peak, point) => !peak || point.total_revenue > peak.total_revenue ? point : peak, null)
+  const unusualPeak = peakPoint && medianRevenue > 0 && peakPoint.total_revenue >= medianRevenue * 1.25 ? peakPoint : null
   const bucketAdj = chartBucket === 'day' ? 'Daily' : chartBucket === 'week' ? 'Weekly' : 'Monthly'
 
   // ─── Total Sales Breakdown (finance settlement P&L, from get_finance_pnl) ───
@@ -591,6 +625,7 @@ export default function SalesOverview() {
   const staleMarkets = freshestMarketDate
     ? marketFreshness.filter(row => !row.data_through || row.data_through < freshestMarketDate)
     : []
+  const totalMarketRevenue = marketDrivers.reduce((sum, row) => sum + Number(row.revenue || 0), 0)
 
   const truncate = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + '…' : s
 
@@ -607,7 +642,7 @@ export default function SalesOverview() {
               ? `${fmtDateLabel(displayedRangeStart)} — ${fmtDateLabel(displayedRangeEnd)}`
               : 'Select a date range'}
           </span>
-          <DateRangeFilter onChange={setDateRange} defaultPreset="last_30d" anchorDate={dataThrough} />
+          <DateRangeFilter key={initialPreset} onChange={setDateRange} defaultPreset={initialPreset} anchorDate={dataThrough} />
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             Compare
             <select disabled={comparisonImpossible} value={comparisonImpossible ? 'unavailable' : comparisonMode} onChange={event => setComparisonMode(event.target.value as ComparisonMode)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-elevated)', color: comparisonImpossible ? 'var(--text-dim)' : 'var(--text-primary)', fontSize: 11 }}>
@@ -617,6 +652,15 @@ export default function SalesOverview() {
             </select>
           </label>
           <MarketplaceFilter selected={markets} onChange={setMarkets} />
+          {markets.length > 1 && marketDrivers.length > 1 && totalMarketRevenue > 0 && (
+            <div aria-label="Marketplace revenue split" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {marketDrivers.map(row => (
+                <span key={row.marketplace} style={{ padding: '4px 7px', borderRadius: 999, background: 'var(--bg-elevated)', color: 'var(--text-muted)', fontSize: 9, whiteSpace: 'nowrap' }}>
+                  <strong style={{ color: 'var(--text-primary)' }}>{row.marketplace}</strong> {((Number(row.revenue || 0) / totalMarketRevenue) * 100).toFixed(0)}%
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -785,21 +829,24 @@ export default function SalesOverview() {
           <ExecutiveBriefing
             comparisonAvailable={comparisonComplete && prevData.length > 0}
             comparisonLabel={comparisonLabel}
-            marketDrivers={marketDrivers}
+            skuDrivers={skuDrivers}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,
               units: totalUnits,
               sessions: totalSessions, priorSessions: prevSessions,
               conversion: convRate, priorConversion: prevConvRate,
               asp, priorAsp: prevAsp,
-              buyBox: Number(overviewSummary.buy_box_pct) || 0,
-              priorBuyBox: Number(overviewSummary.prior_buy_box_pct) || 0,
             }}
           />
 
           <SalesKpiHierarchy
             comparisonLabel={comparisonLabel}
             comparisonComplete={comparisonComplete && prevData.length > 0}
+            activeSeries={showUnits && !showRevenue ? 'units' : 'revenue'}
+            onSeriesSelect={series => {
+              setShowRevenue(series === 'revenue')
+              setShowUnits(series === 'units')
+            }}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,
               units: totalUnits, priorUnits: prevUnits,
@@ -875,6 +922,7 @@ export default function SalesOverview() {
                 <Tooltip content={<CustomTooltip />} />
                 {showRevenue && <Area yAxisId="revenue" type="monotone" dataKey="total_revenue" name="Revenue" stroke="var(--chart-primary)" strokeWidth={1.75} fill="url(#revGrad)" dot={false} />}
                 {showUnits && <Line yAxisId="units" type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />}
+                {showRevenue && unusualPeak && <ReferenceDot yAxisId="revenue" x={unusualPeak.label} y={unusualPeak.total_revenue} r={4} fill="var(--chart-primary)" stroke="var(--bg-card)" label={{ value: `Peak +${Math.round((unusualPeak.total_revenue / medianRevenue - 1) * 100)}% vs typical`, position: 'top', fill: 'var(--text-muted)', fontSize: 9 }} />}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -933,7 +981,7 @@ export default function SalesOverview() {
             comparisonLabel={comparisonLabel}
             skuDrivers={skuDrivers}
             marketDrivers={marketDrivers}
-            marketplaceCount={markets.length}
+            marketplaceCount={0}
             inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,

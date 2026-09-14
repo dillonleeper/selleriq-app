@@ -161,7 +161,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
         const color = driverView === 'gains' ? 'var(--green)' : 'var(--red)'
         const Icon = driverView === 'gains' ? ArrowUpRight : ArrowDownRight
         return (
-          <section className="card overview-driver-panel" aria-labelledby="product-drivers-heading" style={{ order: 2 }}>
+          <section id="product-drivers" className="card overview-driver-panel" aria-labelledby="product-drivers-heading" style={{ order: 2, scrollMarginTop: 20 }}>
             <div className="overview-driver-header">
               <div>
                 <div id="product-drivers-heading" style={{ fontSize: 13, fontWeight: 600 }}>Product drivers</div>

@@ -8,6 +8,8 @@ import {
 type Props = {
   comparisonLabel: string
   comparisonComplete: boolean
+  activeSeries: 'revenue' | 'units'
+  onSeriesSelect: (series: 'revenue' | 'units') => void
   metrics: {
     revenue: number
     priorRevenue: number
@@ -43,11 +45,21 @@ type SummaryMetricProps = {
   color: string
   hero?: boolean
   delta?: number | null
+  onClick?: () => void
+  active?: boolean
 }
 
-function SummaryMetric({ label, value, detail, icon, color, hero, delta }: SummaryMetricProps) {
+function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick, active }: SummaryMetricProps) {
   return (
-    <div className={`overview-summary-metric ${hero ? 'is-hero' : ''}`}>
+    <div
+      className={`overview-summary-metric ${hero ? 'is-hero' : ''}`}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick ? active : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } } : undefined}
+      style={{ cursor: onClick ? 'pointer' : 'default', boxShadow: active ? `inset 0 -3px 0 ${color}` : undefined }}
+    >
       <div className="overview-metric-heading">
         <span>{label}</span>
         <span style={{ color }}>{icon}</span>
@@ -88,7 +100,7 @@ function Diagnostic({ label, value, detail, icon, color }: DiagnosticProps) {
   )
 }
 
-export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete, metrics }: Props) {
+export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete, activeSeries, onSeriesSelect, metrics }: Props) {
   const comparisonDetail = (priorValue: string) => comparisonComplete ? `${priorValue} ${comparisonLabel}` : ''
 
   const lockedItems = [
@@ -106,6 +118,8 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           value={money(metrics.revenue)}
           detail={comparisonDetail(money(metrics.priorRevenue))}
           delta={comparisonComplete ? relativeDelta(metrics.revenue, metrics.priorRevenue) : null}
+          onClick={() => onSeriesSelect('revenue')}
+          active={activeSeries === 'revenue'}
           icon={<DollarSign size={16} />}
           color="var(--accent)"
         />
@@ -113,6 +127,9 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           label="Units ordered"
           value={integer(metrics.units)}
           detail={comparisonDetail(integer(metrics.priorUnits))}
+          delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null}
+          onClick={() => onSeriesSelect('units')}
+          active={activeSeries === 'units'}
           icon={<ShoppingCart size={16} />}
           color="var(--green)"
         />
@@ -120,6 +137,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           label="Sessions"
           value={integer(metrics.sessions)}
           detail={comparisonDetail(integer(metrics.priorSessions))}
+          delta={comparisonComplete ? relativeDelta(metrics.sessions, metrics.priorSessions) : null}
           icon={<Eye size={16} />}
           color="var(--yellow)"
         />
@@ -127,6 +145,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           label="Conversion"
           value={`${metrics.conversion.toFixed(2)}%`}
           detail={comparisonDetail(`${metrics.priorConversion.toFixed(2)}%`)}
+          delta={comparisonComplete && metrics.priorConversion > 0 ? relativeDelta(metrics.conversion, metrics.priorConversion) : null}
           icon={<Percent size={16} />}
           color="#EC4899"
         />

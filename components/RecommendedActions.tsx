@@ -229,7 +229,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
 
   const hiddenCount = preferencesLoaded ? actions.filter(action => isHidden(preferences[action.id], now)).length : 0
   const displayedActions = showHidden ? actions : actions.filter(action => !preferencesLoaded || !isHidden(preferences[action.id], now))
-  const visibleActions = showAll ? displayedActions : displayedActions.slice(0, 3)
+  const visibleActions = showAll ? displayedActions : displayedActions.slice(0, 2)
 
   return (
     <section className="card overview-actions-card" aria-labelledby="actions-heading">
@@ -320,9 +320,9 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
         )
       })}
 
-      {displayedActions.length > 3 && (
+      {displayedActions.length > 2 && (
         <button type="button" className="overview-view-actions" onClick={() => setShowAll(value => !value)}>
-          {showAll ? 'Show top 3' : `View all ${displayedActions.length} actions`}
+          {showAll ? 'Show top 2' : `View all ${displayedActions.length} actions`}
         </button>
       )}
       <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-dim)' }}>Impact is an estimate, not a forecast. Advertising, refunds, and product-cost actions remain gated until their source data is verified.</div>
