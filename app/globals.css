@@ -867,12 +867,23 @@ html, body {
 .overview-disclosure-action { opacity: .88; }
 
 /* Section rhythm creates scan paths without extra decoration. */
-.overview-story { gap: 14px; margin-bottom: 28px; }
+.sales-overview-page { --overview-section-gap: 12px; }
+.sales-overview-page .overview-page-header,
+.sales-overview-page .overview-search,
+.sales-overview-page .overview-briefing,
+.sales-overview-page .overview-kpis,
+.sales-overview-page .overview-sales-trend,
+.sales-overview-page .overview-chart-grid,
+.sales-overview-page .overview-story,
+.sales-overview-page .overview-disclosure {
+  margin-bottom: var(--overview-section-gap) !important;
+}
+.overview-story { gap: var(--overview-section-gap); }
 .sales-overview-page > section,
 .sales-overview-page > details { scroll-margin-top: 24px; }
 
 @media (max-width: 760px) {
-  .overview-briefing { min-height: 0; margin-bottom: 24px; padding: 30px 22px; border-radius: 22px; }
+  .overview-briefing { min-height: 0; padding: 30px 22px; border-radius: 22px; }
   .overview-briefing h2 { font-size: clamp(29px, 9vw, 39px); line-height: 1.02; }
   .overview-summary-panel { border-radius: 18px; }
   .overview-summary-metric { padding: 18px 16px; }
