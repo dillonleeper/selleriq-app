@@ -13,7 +13,7 @@ import { releaseFeatures } from '@/lib/releaseConfig'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
-  ComposedChart, AreaChart, Bar
+  ComposedChart, AreaChart, Line
 } from 'recharts'
 import { LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
 
@@ -831,21 +831,6 @@ export default function SalesOverview() {
             }}
           />
 
-          <SalesOverviewInsights
-            comparisonAvailable={comparisonComplete && prevData.length > 0}
-            comparisonLabel={comparisonLabel}
-            skuDrivers={skuDrivers}
-            marketDrivers={marketDrivers}
-            inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
-            metrics={{
-              revenue: totalRevenue, priorRevenue: prevRevenue,
-              units: totalUnits, priorUnits: prevUnits,
-              sessions: totalSessions, priorSessions: prevSessions,
-              conversion: convRate, priorConversion: prevConvRate,
-              asp, priorAsp: prevAsp,
-            }}
-          />
-
           {/* Revenue and units share dates but use separate charts so unlike scales do not compete. */}
           <div className="card" style={{ padding: '24px', marginBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '18px' }}>
@@ -901,23 +886,19 @@ export default function SalesOverview() {
             </ResponsiveContainer>
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>Units ordered</div>
-              <ResponsiveContainer width="100%" height={90}>
+              <ResponsiveContainer width="100%" height={105}>
                 <ComposedChart data={chartData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                   <XAxis dataKey="label" hide />
                   <YAxis tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => fmt(v)} width={60} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="total_units" name="Units" fill="var(--chart-success)" opacity={0.72} radius={[3, 3, 0, 0]} maxBarSize={18} />
+                  <Line type="monotone" dataKey="total_units" name="Units" stroke="var(--chart-success)" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
           </div>
 
           {/* Sessions + Conversion rate over time */}
-          <section aria-labelledby="demand-drivers-heading">
-          <div style={{ margin: '22px 0 10px' }}>
-            <div id="demand-drivers-heading" style={{ fontSize: 14, fontWeight: 600 }}>Demand drivers</div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Sessions and conversion trends</div>
-          </div>
+          <section aria-label="Demand driver charts">
           <div className="overview-chart-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '20px' }}>
             <div className="card" style={{ padding: '24px' }}>
               <div style={{ marginBottom: '18px' }}>
@@ -964,6 +945,21 @@ export default function SalesOverview() {
             </div>
           </div>
           </section>
+
+          <SalesOverviewInsights
+            comparisonAvailable={comparisonComplete && prevData.length > 0}
+            comparisonLabel={comparisonLabel}
+            skuDrivers={skuDrivers}
+            marketDrivers={marketDrivers}
+            inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
+            metrics={{
+              revenue: totalRevenue, priorRevenue: prevRevenue,
+              units: totalUnits, priorUnits: prevUnits,
+              sessions: totalSessions, priorSessions: prevSessions,
+              conversion: convRate, priorConversion: prevConvRate,
+              asp, priorAsp: prevAsp,
+            }}
+          />
 
 
           {releaseFeatures.financialReconciliation && <>
