@@ -247,7 +247,7 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
     const existing = strongestBySku.get(candidate.sku)
     if (!existing || candidate.score > existing.score) strongestBySku.set(candidate.sku, candidate)
   }
-  return [...strongestBySku.values()].map(action => {
+  return [...strongestBySku.values()].map((action): ActionItem => {
     const diagnosis = diagnostics[action.sku]
     if (!diagnosis || action.kind === 'stock') return action
     const stateWeight = diagnosis.state === 'persistent' ? 1
