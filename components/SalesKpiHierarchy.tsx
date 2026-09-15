@@ -49,22 +49,19 @@ type SummaryMetricProps = {
   delta?: number | null
   onClick?: () => void
   active?: boolean
-  locked?: boolean
 }
 
-function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick, active, locked }: SummaryMetricProps) {
-  const interactiveClick = locked ? undefined : onClick
+function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick, active }: SummaryMetricProps) {
   return (
     <div
-      className={`overview-summary-metric ${hero ? 'is-hero' : ''}`}
+      className={`overview-summary-metric ${hero ? 'is-hero' : ''} ${active ? 'is-charted' : ''}`}
       role={onClick ? 'button' : undefined}
-      tabIndex={interactiveClick ? 0 : undefined}
+      tabIndex={onClick ? 0 : undefined}
       aria-pressed={onClick ? active : undefined}
-      aria-disabled={locked || undefined}
-      title={locked ? 'Deselect a metric before adding another' : active ? `Remove ${label} from chart` : `Add ${label} to chart`}
-      onClick={interactiveClick}
-      onKeyDown={interactiveClick ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); interactiveClick() } } : undefined}
-      style={{ cursor: locked ? 'not-allowed' : onClick ? 'pointer' : 'default', opacity: locked ? 0.5 : 1, boxShadow: active ? `inset 0 0 0 2px ${color}` : undefined, transition: 'opacity .15s ease, box-shadow .15s ease' }}
+      title={active ? `Remove ${label} from chart` : `Add ${label} to chart`}
+      onClick={onClick}
+      onKeyDown={onClick ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } } : undefined}
+      style={{ cursor: onClick ? 'pointer' : 'default', '--chart-selection-color': color } as React.CSSProperties}
     >
       <div className="overview-metric-heading">
         <span>{label}</span>
@@ -117,7 +114,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
 
   return (
     <section className="overview-kpis" aria-label="Sales KPIs" style={{ marginBottom: 12 }}>
-      <div style={{ margin: '0 0 6px 4px', color: 'var(--text-muted)', fontSize: 10 }}>Choose up to two KPIs to chart</div>
+      <div style={{ margin: '0 0 6px 4px', color: 'var(--text-muted)', fontSize: 10 }}>Choose up to two KPIs to chart · a third selection replaces the oldest</div>
       <div className="overview-summary-panel">
         <SummaryMetric
           hero
@@ -127,7 +124,6 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           delta={comparisonComplete ? relativeDelta(metrics.revenue, metrics.priorRevenue) : null}
           onClick={() => onSeriesToggle('revenue')}
           active={activeSeries.includes('revenue')}
-          locked={activeSeries.length >= 2 && !activeSeries.includes('revenue')}
           icon={<DollarSign size={16} />}
           color="var(--accent)"
         />
@@ -138,7 +134,6 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           delta={comparisonComplete ? relativeDelta(metrics.units, metrics.priorUnits) : null}
           onClick={() => onSeriesToggle('units')}
           active={activeSeries.includes('units')}
-          locked={activeSeries.length >= 2 && !activeSeries.includes('units')}
           icon={<ShoppingCart size={16} />}
           color="var(--green)"
         />
@@ -149,7 +144,6 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           delta={comparisonComplete ? relativeDelta(metrics.sessions, metrics.priorSessions) : null}
           onClick={() => onSeriesToggle('sessions')}
           active={activeSeries.includes('sessions')}
-          locked={activeSeries.length >= 2 && !activeSeries.includes('sessions')}
           icon={<Eye size={16} />}
           color="var(--yellow)"
         />
@@ -160,7 +154,6 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           delta={comparisonComplete && metrics.priorConversion > 0 ? relativeDelta(metrics.conversion, metrics.priorConversion) : null}
           onClick={() => onSeriesToggle('conversion')}
           active={activeSeries.includes('conversion')}
-          locked={activeSeries.length >= 2 && !activeSeries.includes('conversion')}
           icon={<Percent size={16} />}
           color="#EC4899"
         />

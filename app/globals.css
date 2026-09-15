@@ -795,6 +795,17 @@ html, body {
   min-height: 138px;
   padding: 21px var(--overview-gutter);
   border-left-color: var(--border);
+  position: relative;
+  isolation: isolate;
+}
+.overview-summary-metric.is-charted::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border: 2px solid var(--chart-selection-color);
+  border-radius: 16px;
+  pointer-events: none;
 }
 .overview-summary-metric.is-hero { background: linear-gradient(145deg, #fff, #f1f7fc); }
 .overview-metric-heading { font-size: 9px; color: #68717d; letter-spacing: .075em; }

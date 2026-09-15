@@ -624,7 +624,7 @@ export default function SalesOverview() {
   const totalMarketRevenue = marketDrivers.reduce((sum, row) => sum + Number(row.revenue || 0), 0)
   const toggleSeries = (series: ChartSeries) => setSelectedSeries(current => {
     if (current.includes(series)) return current.length === 1 ? current : current.filter(item => item !== series)
-    return current.length < 2 ? [...current, series] : current
+    return current.length < 2 ? [...current, series] : [current[1], series]
   })
   const seriesConfig: Record<ChartSeries, { dataKey: keyof ChartPoint; label: string; color: string; format: (value: number) => string }> = {
     revenue: { dataKey: 'total_revenue', label: 'Revenue', color: 'var(--chart-primary)', format: value => '$' + fmt(value) },
