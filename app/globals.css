@@ -799,7 +799,7 @@ html, body {
 }
 .overview-summary-metric.is-hero { background: var(--bg-card); }
 .overview-summary-metric.is-charted {
-  background: linear-gradient(145deg, #fff 8%, color-mix(in srgb, var(--chart-selection-color) 17%, #fff) 100%);
+  background: linear-gradient(145deg, #fff 8%, var(--chart-selection-fill) 100%);
 }
 .overview-metric-heading { font-size: 9px; color: #68717d; letter-spacing: .075em; }
 .overview-metric-value { font-family: var(--font-geist-mono), ui-monospace, monospace; font-weight: 600; }

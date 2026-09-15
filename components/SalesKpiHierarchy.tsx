@@ -45,13 +45,14 @@ type SummaryMetricProps = {
   detail: string
   icon: React.ReactNode
   color: string
+  fill: string
   hero?: boolean
   delta?: number | null
   onClick?: () => void
   active?: boolean
 }
 
-function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick, active }: SummaryMetricProps) {
+function SummaryMetric({ label, value, detail, icon, color, fill, hero, delta, onClick, active }: SummaryMetricProps) {
   return (
     <div
       className={`overview-summary-metric ${hero ? 'is-hero' : ''} ${active ? 'is-charted' : ''}`}
@@ -61,7 +62,7 @@ function SummaryMetric({ label, value, detail, icon, color, hero, delta, onClick
       title={active ? `Remove ${label} from chart` : `Add ${label} to chart`}
       onClick={onClick}
       onKeyDown={onClick ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } } : undefined}
-      style={{ cursor: onClick ? 'pointer' : 'default', '--chart-selection-color': color } as React.CSSProperties}
+      style={{ cursor: onClick ? 'pointer' : 'default', '--chart-selection-fill': fill } as React.CSSProperties}
     >
       <div className="overview-metric-heading">
         <span>{label}</span>
@@ -125,6 +126,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           active={activeSeries.includes('revenue')}
           icon={<DollarSign size={16} />}
           color="var(--accent)"
+          fill="#eaf4fd"
         />
         <SummaryMetric
           label="Units ordered"
@@ -135,6 +137,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           active={activeSeries.includes('units')}
           icon={<ShoppingCart size={16} />}
           color="var(--green)"
+          fill="#edf7ee"
         />
         <SummaryMetric
           label="Sessions"
@@ -145,6 +148,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           active={activeSeries.includes('sessions')}
           icon={<Eye size={16} />}
           color="var(--yellow)"
+          fill="#faf5e7"
         />
         <SummaryMetric
           label="Conversion"
@@ -155,6 +159,7 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
           active={activeSeries.includes('conversion')}
           icon={<Percent size={16} />}
           color="#EC4899"
+          fill="#fdeef6"
         />
       </div>
 
