@@ -16,6 +16,7 @@ export type DiagnosticPoint = {
 }
 
 export type DiagnosticResult = {
+  metric: 'conversion' | 'sessions'
   state: IssueState
   association: AssociatedSignal
   strength: EvidenceStrength
@@ -88,6 +89,27 @@ function isMaterialConversionDrop(current: WindowSummary, baseline: WindowSummar
   return points <= -1 && relative <= -15 && conversionDifferenceIsReliable(current, baseline)
 }
 
+function averageSessions(window: WindowSummary) {
+  return window.points.length ? window.sessions / window.points.length : null
+}
+
+function isAggregateSessionDrop(current: WindowSummary, baseline: WindowSummary) {
+  const currentAverage = averageSessions(current)
+  const baselineAverage = averageSessions(baseline)
+  return current.points.length >= 10 && baseline.points.length >= 21 && currentAverage != null && baselineAverage != null
+    && baselineAverage > 0 && currentAverage <= baselineAverage * 0.8
+}
+
+function isMaterialSessionDrop(current: WindowSummary, baseline: WindowSummary) {
+  const currentAverage = averageSessions(current)
+  const baselineAverage = averageSessions(baseline)
+  if (current.points.length < 10 || baseline.points.length < 21 || currentAverage == null || baselineAverage == null || baselineAverage === 0) return false
+  const currentMedian = median(current.points.map(point => point.sessions || 0))
+  const baselineMedian = median(baseline.points.map(point => point.sessions || 0))
+  if (currentMedian == null || baselineMedian == null || baselineMedian === 0) return false
+  return isAggregateSessionDrop(current, baseline) && currentMedian <= baselineMedian * 0.85
+}
+
 function removeConversionOutliers(points: DiagnosticPoint[]) {
   const rates = points.map(point => point.conv_rate).filter((value): value is number => value != null && Number.isFinite(value))
   const center = median(rates)
@@ -95,6 +117,15 @@ function removeConversionOutliers(points: DiagnosticPoint[]) {
   if (center == null || dispersion == null) return points
   const limit = dispersion === 0 ? Math.max(1, Math.abs(center) * 0.5) : 3 * 1.4826 * dispersion
   return points.filter(point => point.conv_rate == null || Math.abs(point.conv_rate - center) <= limit)
+}
+
+function removeSessionOutliers(points: DiagnosticPoint[]) {
+  const values = points.map(point => point.sessions).filter((value): value is number => value != null && Number.isFinite(value))
+  const center = median(values)
+  const dispersion = mad(values, center)
+  if (center == null || dispersion == null) return points
+  const limit = dispersion === 0 ? Math.max(5, Math.abs(center) * 0.5) : 3 * 1.4826 * dispersion
+  return points.filter(point => point.sessions == null || Math.abs(point.sessions - center) <= limit)
 }
 
 export function analyzeRecommendationSeries(rawPoints: DiagnosticPoint[]): DiagnosticResult | null {
@@ -108,21 +139,32 @@ export function analyzeRecommendationSeries(rawPoints: DiagnosticPoint[]): Diagn
   const baseline = historical.points.length >= 21 ? historical : summarize(observed.slice(0, -14))
   if (recent.sessions < 250 || baseline.sessions < 250 || recent.conversion == null || baseline.conversion == null) return null
 
-  const recentDrop = isMaterialConversionDrop(recent, baseline)
-  const previousDrop = isMaterialConversionDrop(previous, baseline)
-  const recentVsPrevious = recent.conversion - (previous.conversion ?? recent.conversion)
-  const recoveryDenominator = baseline.conversion - (previous.conversion ?? baseline.conversion)
-  const recoveredFraction = recoveryDenominator > 0 ? recentVsPrevious / recoveryDenominator : 0
-  const cleaned = summarize(removeConversionOutliers(observed))
-  const full = summarize(observed)
-  const fullDelta = (full.conversion ?? 0) - baseline.conversion
-  const cleanedDelta = (cleaned.conversion ?? 0) - baseline.conversion
-  const outlierDriven = fullDelta < -1 && Math.abs(cleanedDelta) < Math.abs(fullDelta) * 0.6
+  const conversionRecentDrop = isMaterialConversionDrop(recent, baseline)
+  const conversionPreviousDrop = isMaterialConversionDrop(previous, baseline)
+  const cleanedRecentConversion = summarize(removeConversionOutliers(recent.points))
+  const conversionOutlierDriven = conversionRecentDrop && !isMaterialConversionDrop(cleanedRecentConversion, baseline)
+  const sessionRecentDrop = isMaterialSessionDrop(recent, baseline)
+  const sessionPreviousDrop = isMaterialSessionDrop(previous, baseline)
+  const cleanedRecentSessions = summarize(removeSessionOutliers(recent.points))
+  const sessionOutlierDriven = isAggregateSessionDrop(recent, baseline) && !isAggregateSessionDrop(cleanedRecentSessions, baseline)
+  const metric: DiagnosticResult['metric'] = conversionRecentDrop || conversionPreviousDrop || conversionOutlierDriven ? 'conversion' : 'sessions'
+  const recentDrop = metric === 'conversion' ? conversionRecentDrop : sessionRecentDrop
+  const previousDrop = metric === 'conversion' ? conversionPreviousDrop : sessionPreviousDrop
+  const outlierDriven = metric === 'conversion' ? conversionOutlierDriven : sessionOutlierDriven
   if (!recentDrop && !previousDrop && !outlierDriven) return null
+
+  const recentValue = metric === 'conversion' ? recent.conversion : averageSessions(recent)
+  const previousValue = metric === 'conversion' ? previous.conversion : averageSessions(previous)
+  const baselineValue = metric === 'conversion' ? baseline.conversion : averageSessions(baseline)
+  if (recentValue == null || previousValue == null || baselineValue == null) return null
+  const recoveryMinimum = metric === 'conversion' ? 1 : baselineValue * 0.15
+  const recentVsPrevious = recentValue - previousValue
+  const recoveryDenominator = baselineValue - previousValue
+  const recoveredFraction = recoveryDenominator > 0 ? recentVsPrevious / recoveryDenominator : 0
 
   let state: IssueState
   if (outlierDriven) state = 'outlier_driven'
-  else if (previousDrop && recentVsPrevious >= 1 && (recoveredFraction >= 0.5 || !recentDrop)) state = 'recovering'
+  else if (previousDrop && recentVsPrevious >= recoveryMinimum && (recoveredFraction >= 0.5 || !recentDrop)) state = 'recovering'
   else if (previousDrop && recentDrop) state = 'persistent'
   else state = 'recent_deterioration'
 
@@ -135,7 +177,7 @@ export function analyzeRecommendationSeries(rawPoints: DiagnosticPoint[]): Diagn
   const ordinaryDays = paired.filter(point => (point.sessions || 0) < spikeThreshold)
   const spikeConversion = summarize(spikeDays).conversion
   const ordinaryConversion = summarize(ordinaryDays).conversion
-  const trafficDilution = paired.length >= 21 && spikeDays.length >= 3 && trafficCorrelation != null && trafficCorrelation <= -0.4
+  const trafficDilution = metric === 'conversion' && paired.length >= 21 && spikeDays.length >= 3 && trafficCorrelation != null && trafficCorrelation <= -0.4
     && spikeConversion != null && ordinaryConversion != null && spikeConversion <= ordinaryConversion - 1
 
   const inventoryObserved = observed.filter(point => point.inventory_market_count >= point.selected_market_count && point.available_quantity != null)
@@ -167,18 +209,26 @@ export function analyzeRecommendationSeries(rawPoints: DiagnosticPoint[]): Diagn
     traffic_dilution: 'The weakest conversion days coincided with unusually high traffic.',
     inventory: 'The decline overlaps days when available inventory was exhausted.',
     buy_box: 'The decline overlaps days with weak Buy Box ownership.',
-    unexplained: 'The available traffic, inventory, and Buy Box signals do not isolate an explanation.',
+    unexplained: metric === 'sessions'
+      ? 'The daily history confirms the traffic pattern but does not identify which traffic source changed.'
+      : 'The available traffic, inventory, and Buy Box signals do not isolate an explanation.',
   }
   const nextStep: Record<AssociatedSignal, string> = {
     traffic_dilution: 'Compare paid and organic traffic, campaigns, and search terms during the session spikes.',
     inventory: 'Review replenishment timing and confirm that unavailable days were not caused by stale inventory snapshots.',
     buy_box: 'Review offer ownership, price changes, and competing sellers on the affected dates.',
-    unexplained: 'Inspect the product timeline and check price, promotion, advertising, and listing changes.',
+    unexplained: metric === 'sessions'
+      ? 'Review the 90-day traffic timeline, identify when the change began, then compare paid and organic traffic sources.'
+      : 'Inspect the product timeline and check price, promotion, advertising, and listing changes.',
   }
 
-  const delta = recent.conversion - baseline.conversion
-  const evidence = [`Recent conversion ${recent.conversion.toFixed(1)}% vs. ${baseline.conversion.toFixed(1)}% baseline (${delta >= 0 ? '+' : '-'}${pp(delta)})`]
-  if (state === 'recovering' && previous.conversion != null) evidence.push(`Improved ${pp(recent.conversion - previous.conversion)} vs. the preceding 14 days`)
+  const delta = recentValue - baselineValue
+  const evidence = metric === 'conversion'
+    ? [`Recent conversion ${recentValue.toFixed(1)}% vs. ${baselineValue.toFixed(1)}% baseline (${delta >= 0 ? '+' : '-'}${pp(delta)})`]
+    : [`Recent sessions averaged ${Math.round(recentValue).toLocaleString()} per day vs. ${Math.round(baselineValue).toLocaleString()} baseline (${delta >= 0 ? '+' : ''}${((delta / baselineValue) * 100).toFixed(1)}%)`]
+  if (state === 'recovering') evidence.push(metric === 'conversion'
+    ? `Improved ${pp(recentVsPrevious)} vs. the preceding 14 days`
+    : `Improved ${Math.abs((recentVsPrevious / previousValue) * 100).toFixed(1)}% vs. the preceding 14 days`)
   if (trafficDilution && trafficCorrelation != null) evidence.push(`${spikeDays.length} traffic-spike days; session/conversion association ${trafficCorrelation.toFixed(2)}`)
   if (inventoryAssociation) evidence.push(`${unavailable.points.length} observed days without available inventory`)
   if (buyBoxAssociation) evidence.push(`${weakBuyBox.points.length} observed days below 80% Buy Box`)
@@ -188,8 +238,8 @@ export function analyzeRecommendationSeries(rawPoints: DiagnosticPoint[]): Diagn
     : observed.length >= 28 && recent.sessions >= 500 ? 'moderate' : 'limited'
 
   return {
-    state, association, strength,
-    headline: `Conversion ${stateText[state]}`,
+    metric, state, association, strength,
+    headline: `${metric === 'conversion' ? 'Conversion' : 'Traffic'} ${stateText[state]}`,
     interpretation: associationText[association],
     nextStep: nextStep[association],
     evidence, observedDays: observed.length,

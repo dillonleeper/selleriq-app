@@ -46,4 +46,14 @@ equal(analyzeRecommendationSeries(series(inventoryConversions, { buyBox }))?.ass
 equal(analyzeRecommendationSeries(series([...Array(76).fill(10), ...Array(14).fill(5)]))?.association, 'unexplained')
 equal(analyzeRecommendationSeries(series(Array(90).fill(10))), null)
 
+const persistentTraffic = [...Array(62).fill(100), ...Array(28).fill(50)]
+const recentTraffic = [...Array(76).fill(100), ...Array(14).fill(50)]
+const recoveringTraffic = [...Array(62).fill(100), ...Array(14).fill(50), ...Array(14).fill(90)]
+const outlierTraffic = [...Array(76).fill(100), ...Array(11).fill(100), ...Array(3).fill(0)]
+equal(analyzeRecommendationSeries(series(Array(90).fill(10), { sessions: persistentTraffic }))?.metric, 'sessions')
+equal(analyzeRecommendationSeries(series(Array(90).fill(10), { sessions: persistentTraffic }))?.state, 'persistent')
+equal(analyzeRecommendationSeries(series(Array(90).fill(10), { sessions: recentTraffic }))?.state, 'recent_deterioration')
+equal(analyzeRecommendationSeries(series(Array(90).fill(10), { sessions: recoveringTraffic }))?.state, 'recovering')
+equal(analyzeRecommendationSeries(series(Array(90).fill(10), { sessions: outlierTraffic }))?.state, 'outlier_driven')
+
 console.log('recommendation diagnostics: all classification checks passed')
