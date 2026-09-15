@@ -49,6 +49,8 @@ type Props = {
   marketplaceCount: number
   inventoryRisks: InventoryRisk[]
   inventoryError: boolean
+  markets: string[]
+  dataThrough: string | null
   metrics: {
     revenue: number
     priorRevenue: number
@@ -117,7 +119,7 @@ function effectClause(factor: Factor) {
   return factor.effect >= 0 ? `added ${money(factor.effect)}` : `reduced revenue by ${money(Math.abs(factor.effect))}`
 }
 
-export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, marketplaceCount, inventoryRisks, inventoryError, metrics }: Props) {
+export default function SalesOverviewInsights({ comparisonAvailable, comparisonLabel, skuDrivers, marketDrivers, marketplaceCount, inventoryRisks, inventoryError, markets, dataThrough, metrics }: Props) {
   const [driverView, setDriverView] = useState<'gains' | 'declines'>('gains')
   const positives = skuDrivers.filter(row => n(row.revenue_delta) > 0).sort((a, b) => n(b.revenue_delta) - n(a.revenue_delta)).slice(0, 5)
   const negatives = skuDrivers.filter(row => n(row.revenue_delta) < 0).sort((a, b) => n(a.revenue_delta) - n(b.revenue_delta)).slice(0, 5)
@@ -133,7 +135,7 @@ export default function SalesOverviewInsights({ comparisonAvailable, comparisonL
 
   return (
     <div className="overview-story" style={{ gap: 12, marginBottom: 12 }}>
-      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} />
+      <RecommendedActions comparisonAvailable={comparisonAvailable} skuDrivers={skuDrivers} inventoryRisks={inventoryRisks} inventoryError={inventoryError} markets={markets} dataThrough={dataThrough} />
 
       {marketplaceCount > 1 && marketDrivers.length > 1 && (
         <section className="card overview-market-card" aria-labelledby="market-heading" style={{ order: 3 }}>

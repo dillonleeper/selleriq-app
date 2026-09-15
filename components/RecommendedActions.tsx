@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDownRight, Boxes, CheckCircle2, ChevronDown, Clock3, ExternalLink, Eye, EyeOff, LockKeyhole, RotateCcw, X } from 'lucide-react'
 import type { InventoryRisk, SkuDriver } from '@/components/SalesOverviewInsights'
+import { supabase } from '@/lib/supabase'
+import { analyzeRecommendationSeries, type DiagnosticPoint, type DiagnosticResult } from '@/lib/recommendationDiagnostics'
 import styles from './RecommendedActions.module.css'
 
 type Props = {
@@ -11,6 +13,8 @@ type Props = {
   skuDrivers: SkuDriver[]
   inventoryRisks: InventoryRisk[]
   inventoryError: boolean
+  markets: string[]
+  dataThrough: string | null
 }
 
 type ActionKind = 'revenue' | 'traffic' | 'conversion' | 'buybox' | 'stock'
@@ -29,6 +33,8 @@ type ActionItem = {
   score: number
   confidence: Confidence
   href: string
+  nextStep?: string
+  diagnosis?: DiagnosticResult
 }
 
 const STORAGE_KEY = 'selleriq-action-state-v1'
@@ -39,7 +45,7 @@ const n = (value: number | string | null | undefined) => Number(value) || 0
 const money = (value: number) => `$${Math.abs(value).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
 const signedPercent = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 const productHref = (sku: string) => `/products?sku=${encodeURIComponent(sku)}&expand=1`
-const trafficHref = (sku: string) => `/traffic?sku=${encodeURIComponent(sku)}&expand=1`
+const trafficHref = (sku: string) => `/traffic?sku=${encodeURIComponent(sku)}&expand=1&range=last_90d`
 const inventoryHref = (sku: string, marketplace: string) => `/inventory?sku=${encodeURIComponent(sku)}&market=${encodeURIComponent(marketplace)}&tab=fba`
 
 function confidenceFor(sample: number, highThreshold: number): Confidence {
@@ -78,7 +84,7 @@ function isHidden(preference: ActionPreference | undefined, now: number) {
   return Boolean(preference.until && preference.until > now)
 }
 
-function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inventoryRisks: InventoryRisk[]): ActionItem[] {
+function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inventoryRisks: InventoryRisk[], diagnostics: Record<string, DiagnosticResult>): ActionItem[] {
   const candidates: ActionItem[] = []
 
   if (comparisonAvailable) {
@@ -133,16 +139,19 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
       if (priorConversion > 0 && sessions >= 25 && conversionChange <= -1) {
         const impact = Math.max(0, sessions * ((priorConversion - conversion) / 100) * asp)
         const confidence = confidenceFor(Math.min(sessions, priorSessions), 250)
+        const diagnosis = diagnostics[row.sku]
         candidates.push({
           id: `conversion:${row.sku}`,
           kind: 'conversion', sku: row.sku,
-          title: `Fix conversion for ${row.sku}`,
-          reason: `Triggered because conversion declined ${Math.abs(conversionChange).toFixed(2)} percentage points, beyond the 1-point threshold.`,
-          evidence: [`${conversion.toFixed(2)}% now`, `${priorConversion.toFixed(2)}% previously`, `${sessions.toLocaleString()} sessions`],
+          title: diagnosis ? `${diagnosis.headline} for ${row.sku}` : `Investigate conversion change for ${row.sku}`,
+          reason: diagnosis ? diagnosis.interpretation : `Conversion is lower than the comparison period, but daily diagnostic evidence is unavailable.`,
+          evidence: diagnosis?.evidence || [`${conversion.toFixed(2)}% now`, `${priorConversion.toFixed(2)}% previously`, `${sessions.toLocaleString()} sessions`],
           impact,
           score: impact * confidenceWeight(confidence),
           confidence,
           href: trafficHref(row.sku),
+          nextStep: diagnosis?.nextStep || 'Inspect the product timeline before changing the listing.',
+          diagnosis,
         })
       }
 
@@ -194,11 +203,33 @@ function buildActions(comparisonAvailable: boolean, skuDrivers: SkuDriver[], inv
     const existing = strongestBySku.get(candidate.sku)
     if (!existing || candidate.score > existing.score) strongestBySku.set(candidate.sku, candidate)
   }
-  return [...strongestBySku.values()].sort((left, right) => right.score - left.score).slice(0, 10)
+  return [...strongestBySku.values()].map(action => {
+    const diagnosis = diagnostics[action.sku]
+    if (!diagnosis || action.kind === 'stock') return action
+    const stateWeight = diagnosis.state === 'persistent' ? 1
+      : diagnosis.state === 'recent_deterioration' ? 0.85
+        : diagnosis.state === 'recovering' ? 0.45 : 0.35
+    return {
+      ...action,
+      kind: diagnosis.association === 'inventory' ? 'stock'
+        : diagnosis.association === 'buy_box' ? 'buybox'
+          : diagnosis.association === 'traffic_dilution' ? 'traffic' : 'conversion',
+      title: `${diagnosis.headline} for ${action.sku}`,
+      reason: diagnosis.interpretation,
+      evidence: diagnosis.evidence,
+      nextStep: diagnosis.nextStep,
+      diagnosis,
+      score: action.score * stateWeight,
+      href: trafficHref(action.sku),
+    }
+  }).sort((left, right) => right.score - left.score).slice(0, 10)
 }
 
-export default function RecommendedActions({ comparisonAvailable, skuDrivers, inventoryRisks, inventoryError }: Props) {
-  const actions = useMemo(() => buildActions(comparisonAvailable, skuDrivers, inventoryRisks), [comparisonAvailable, skuDrivers, inventoryRisks])
+export default function RecommendedActions({ comparisonAvailable, skuDrivers, inventoryRisks, inventoryError, markets, dataThrough }: Props) {
+  const [diagnostics, setDiagnostics] = useState<Record<string, DiagnosticResult>>({})
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticsError, setDiagnosticsError] = useState(false)
+  const actions = useMemo(() => buildActions(comparisonAvailable, skuDrivers, inventoryRisks, diagnostics), [comparisonAvailable, skuDrivers, inventoryRisks, diagnostics])
   const [preferences, setPreferences] = useState<Record<string, ActionPreference>>(EMPTY_PREFERENCES)
   const [preferencesLoaded, setPreferencesLoaded] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
@@ -216,6 +247,42 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
     })
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (!dataThrough || !markets.length || !skuDrivers.length) return
+    const candidates = [...skuDrivers]
+      .sort((left, right) => Math.abs(n(right.revenue_delta)) - Math.abs(n(left.revenue_delta)))
+      .slice(0, 50)
+      .map(row => row.sku)
+    const start = new Date(`${dataThrough}T12:00:00`)
+    start.setDate(start.getDate() - 89)
+    const startKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled) return
+      setDiagnosticsLoading(true)
+      setDiagnosticsError(false)
+    })
+    void supabase.rpc('get_recommendation_diagnostic_series', {
+      p_start: startKey, p_end: dataThrough, p_markets: markets, p_skus: candidates,
+    }).then(({ data, error }) => {
+      if (cancelled) return
+      if (error) {
+        console.error(error)
+        setDiagnostics({})
+        setDiagnosticsError(true)
+      } else {
+        const next: Record<string, DiagnosticResult> = {}
+        for (const row of (data || []) as { sku: string; points: DiagnosticPoint[] }[]) {
+          const result = analyzeRecommendationSeries(row.points)
+          if (result) next[row.sku] = result
+        }
+        setDiagnostics(next)
+      }
+      setDiagnosticsLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [dataThrough, markets, skuDrivers])
 
   const updatePreference = (id: string, preference?: ActionPreference) => {
     setPreferences(previous => {
@@ -236,7 +303,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <div>
           <div id="actions-heading" style={{ fontSize: 13, fontWeight: 600 }}>Recommended actions</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>One action per SKU &middot; ranked by estimated revenue impact and evidence confidence.</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>One item per SKU, ranked by estimated exposure and strength of evidence.</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {hiddenCount > 0 && (
@@ -244,7 +311,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
               {showHidden ? 'Hide resolved' : `Review ${hiddenCount} hidden`}
             </button>
           )}
-          <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>Saved on this browser</span>
+          <span style={{ fontSize: 10, color: diagnosticsError ? 'var(--yellow)' : 'var(--text-dim)' }}>{diagnosticsLoading ? 'Checking daily patterns…' : diagnosticsError ? 'Daily diagnostic evidence unavailable' : 'Saved on this browser'}</span>
         </div>
       </div>
 
@@ -262,16 +329,17 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
         return (
           <Fragment key={action.id}>
           <article className="overview-action-row" style={{ borderTop: index ? '1px solid var(--border)' : 'none', opacity: hidden ? 0.58 : 1 }}>
-            <span style={{ width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: index < 3 ? 'var(--red)' : 'var(--yellow)', background: index < 3 ? 'var(--red-light)' : 'var(--yellow-light)' }}>{actionIcon(action.kind)}</span>
+            <span style={{ width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: 'var(--text-muted)', background: 'var(--bg-subtle)' }}>{actionIcon(action.kind)}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, fontWeight: 650 }}>{action.title}</span>
-                <span title="Modeled revenue currently exposed if the issue persists" style={{ fontSize: 9, fontWeight: 650, color: 'var(--red)', background: 'var(--red-light)', borderRadius: 999, padding: '2px 6px' }}>{money(action.impact)} impact</span>
-                <span title={action.confidence === 'High' ? 'Large supporting sample and directly observed signal' : 'Supported signal with a smaller sample or modeled assumption'} style={{ fontSize: 9, fontWeight: 650, color: action.confidence === 'High' ? 'var(--green)' : 'var(--yellow)', background: action.confidence === 'High' ? 'var(--green-light)' : 'var(--yellow-light)', borderRadius: 999, padding: '2px 6px' }}>{action.confidence} confidence</span>
+                <span title="Modeled revenue exposure if the observed pattern persists; this is not guaranteed recovery" style={{ fontSize: 9, color: 'var(--text-muted)' }}>{money(action.impact)} estimated exposure</span>
+                <span title={action.diagnosis ? 'Strength of the observed pattern, not confidence in a causal explanation' : 'Strength reflects sample size only because daily diagnostic evidence is unavailable'} style={{ fontSize: 9, color: 'var(--text-muted)' }}>{action.diagnosis ? `${action.diagnosis.strength} pattern evidence` : `${action.confidence.toLowerCase()} sample strength`}</span>
                 {hidden && <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>{preference?.status === 'dismissed' ? 'Dismissed' : 'Snoozed'}</span>}
                 {reviewed && !hidden && <span className={styles.reviewedBadge}><CheckCircle2 size={10} /> Reviewed</span>}
               </div>
               <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.45 }}>{action.reason}</div>
+              {action.nextStep && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-primary)', lineHeight: 1.45 }}><strong>Next check:</strong> {action.nextStep}</div>}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                 {action.evidence.map(item => <span key={item} style={{ fontSize: 9, color: 'var(--text-dim)', border: '1px solid var(--border)', borderRadius: 999, padding: '2px 6px' }}>{item}</span>)}
               </div>
@@ -284,7 +352,7 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
                   <button type="button" aria-expanded={expanded} onClick={() => {
                     setExpandedActionId(current => current === action.id ? null : action.id)
                     if (!reviewed) updatePreference(action.id, { status: 'reviewed', updatedAt: Date.now() })
-                  }} className={styles.reviewButton}><Eye size={11} /> {expanded ? 'Close review' : 'Review'} <ChevronDown size={10} className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`} /></button>
+                  }} className={styles.reviewButton}><Eye size={11} /> {expanded ? 'Close evidence' : 'Inspect evidence'} <ChevronDown size={10} className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`} /></button>
                   <button type="button" title={`Hide this action for ${SNOOZE_DAYS} days`} onClick={() => updatePreference(action.id, { status: 'snoozed', until: Date.now() + SNOOZE_DAYS * 86_400_000, updatedAt: Date.now() })} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><Clock3 size={11} /> Snooze 7d</button>
                   <button type="button" title="Hide this action until restored" onClick={() => updatePreference(action.id, { status: 'dismissed', updatedAt: Date.now() })} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: 6, padding: '5px 7px', cursor: 'pointer', fontSize: 10 }}><X size={11} /> Dismiss</button>
                 </>
@@ -295,9 +363,10 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
             <section className={styles.panel} aria-label={`Review ${action.title}`}>
               <div className={styles.topGrid}>
                 <div className={styles.summary}>
-                  <span className={styles.label}>SellerIQ conclusion</span>
+                  <span className={styles.label}>Observed pattern</span>
                   <strong>{action.title}</strong>
                   <p>{action.reason}</p>
+                  {action.nextStep && <p><strong>Next check:</strong> {action.nextStep}</p>}
                 </div>
                 <div className={styles.evidence}>
                   <span className={styles.label}>Supporting evidence</span>
@@ -307,10 +376,10 @@ export default function RecommendedActions({ comparisonAvailable, skuDrivers, in
               <div className={styles.footer}>
                 <div className={styles.method}>
                   <span className={styles.label}>How to interpret this</span>
-                  <p><strong>{money(action.impact)}</strong> is modeled revenue exposure, not guaranteed recovery. {action.confidence} confidence reflects the size and directness of the observed sample.</p>
+                  <p><strong>{money(action.impact)}</strong> is modeled exposure, not guaranteed recovery. Pattern strength describes the observed evidence and does not establish cause.</p>
                 </div>
                 <div className={styles.controls}>
-                  <Link href={action.href} className={styles.supportingLink}>Open supporting page <ExternalLink size={11} /></Link>
+                  <Link href={action.href} className={styles.supportingLink}>Open diagnostic timeline <ExternalLink size={11} /></Link>
                   <button className={styles.approvalButton} type="button" disabled title="Approval becomes available only when SellerIQ has a verified write-capable integration for this action."><LockKeyhole size={11} /> Approval unavailable</button>
                 </div>
               </div>

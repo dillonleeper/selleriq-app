@@ -934,6 +934,7 @@ export default function SalesOverview() {
             marketDrivers={marketDrivers}
             marketplaceCount={0}
             inventoryRisks={inventoryRisks} inventoryError={inventoryActionsError}
+            markets={markets} dataThrough={dataThrough}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,
               units: totalUnits, priorUnits: prevUnits,
