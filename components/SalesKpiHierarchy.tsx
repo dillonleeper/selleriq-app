@@ -114,7 +114,6 @@ export default function SalesKpiHierarchy({ comparisonLabel, comparisonComplete,
 
   return (
     <section className="overview-kpis" aria-label="Sales KPIs" style={{ marginBottom: 12 }}>
-      <div style={{ margin: '0 0 6px 4px', color: 'var(--text-muted)', fontSize: 10 }}>Choose up to two KPIs to chart · a third selection replaces the oldest</div>
       <div className="overview-summary-panel">
         <SummaryMetric
           hero

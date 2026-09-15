@@ -807,7 +807,10 @@ html, body {
   border-radius: 16px;
   pointer-events: none;
 }
-.overview-summary-metric.is-hero { background: linear-gradient(145deg, #fff, #f1f7fc); }
+.overview-summary-metric.is-hero { background: var(--bg-card); }
+.overview-summary-metric.is-charted {
+  background: linear-gradient(145deg, #fff 10%, color-mix(in srgb, var(--chart-selection-color) 13%, #fff) 100%);
+}
 .overview-metric-heading { font-size: 9px; color: #68717d; letter-spacing: .075em; }
 .overview-metric-value { font-family: var(--font-geist-mono), ui-monospace, monospace; font-weight: 600; }
 .overview-summary-metric.is-hero .overview-metric-value { font-size: clamp(29px, 3vw, 40px); }

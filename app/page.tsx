@@ -12,7 +12,7 @@ import { useProductSelection } from '@/components/ProductSelectionContext'
 import {
   Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
-  ComposedChart, Line, ReferenceDot
+  ComposedChart, ReferenceDot
 } from 'recharts'
 import { LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
 
@@ -909,18 +909,16 @@ export default function SalesOverview() {
             <ResponsiveContainer width="100%" height={260}>
               <ComposedChart data={chartData} margin={{ top: 28, right: 8, bottom: 0, left: 0 }}>
                 <defs>
-                  <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--chart-primary)" stopOpacity={1} />
-                    <stop offset="95%" stopColor="var(--chart-primary)" stopOpacity={0} />
-                  </linearGradient>
+                  {selectedSeries.map(series => <linearGradient key={series} id={`${series}Grad`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={seriesConfig[series].color} stopOpacity={0.48} />
+                    <stop offset="95%" stopColor={seriesConfig[series].color} stopOpacity={0.03} />
+                  </linearGradient>)}
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 {selectedSeries.map((series, index) => <YAxis key={series} yAxisId={series} orientation={index === 0 ? 'left' : 'right'} tick={{ fontSize: 10, fill: seriesConfig[series].color }} tickLine={false} axisLine={false} tickFormatter={seriesConfig[series].format} width={series === 'revenue' ? 60 : 50} />)}
                 <Tooltip content={<CustomTooltip />} />
-                {selectedSeries.map(series => series === 'revenue'
-                  ? <Area key={series} yAxisId={series} type="monotone" dataKey={seriesConfig[series].dataKey} name={seriesConfig[series].label} stroke={seriesConfig[series].color} strokeWidth={1.75} fill="url(#revGrad)" dot={false} />
-                  : <Line key={series} yAxisId={series} type="monotone" dataKey={seriesConfig[series].dataKey} name={seriesConfig[series].label} stroke={seriesConfig[series].color} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />)}
+                {selectedSeries.map(series => <Area key={series} yAxisId={series} type="monotone" dataKey={seriesConfig[series].dataKey} name={seriesConfig[series].label} stroke={seriesConfig[series].color} strokeWidth={1.8} fill={`url(#${series}Grad)`} dot={false} activeDot={{ r: 3 }} />)}
                 {selectedSeries.includes('revenue') && unusualPeak && <ReferenceDot yAxisId="revenue" x={unusualPeak.label} y={unusualPeak.total_revenue} r={4} fill="var(--chart-primary)" stroke="var(--bg-card)" label={{ value: `${Math.round((unusualPeak.total_revenue / medianRevenue - 1) * 100)}% above typical`, position: 'top', fill: 'var(--text-muted)', fontSize: 9 }} />}
               </ComposedChart>
             </ResponsiveContainer>
