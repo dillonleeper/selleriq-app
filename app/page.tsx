@@ -835,12 +835,15 @@ export default function SalesOverview() {
           <ExecutiveBriefing
             comparisonAvailable={comparisonComplete && prevData.length > 0}
             comparisonLabel={comparisonLabel}
-            skuDrivers={skuDrivers}
+            marketDrivers={marketDrivers}
             metrics={{
               revenue: totalRevenue, priorRevenue: prevRevenue,
+              units: totalUnits,
               sessions: totalSessions, priorSessions: prevSessions,
               conversion: convRate, priorConversion: prevConvRate,
               asp, priorAsp: prevAsp,
+              buyBox: Number(overviewSummary.buy_box_pct) || 0,
+              priorBuyBox: Number(overviewSummary.prior_buy_box_pct) || 0,
             }}
           />
 
