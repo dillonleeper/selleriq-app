@@ -7,6 +7,7 @@ import MarketplaceFilter from '@/components/MarketplaceFilter'
 import DashboardState from '@/components/DashboardState'
 import { useProductSelection } from '@/components/ProductSelectionContext'
 import ContextualAction from '@/components/ContextualAction'
+import { calculateFbaShipment, FBA_LEAD_DEFAULT, FBA_TARGET_DEFAULT } from '@/lib/inventoryPolicy'
 import forecastStyles from './InventoryForecastPanel.module.css'
 import {
   AlertTriangle, Package, TrendingDown, ArrowDown,
@@ -21,8 +22,6 @@ import {
 // ─── Constants ───────────────────────────────────────────────
 const LOW_STOCK_THRESHOLD   = 30
 const CRITICAL_THRESHOLD    = 14
-const FBA_TARGET_DEFAULT      = 60
-const FBA_LEAD_DEFAULT        = 14
 const SUPPLIER_PROD_DEFAULT   = 42
 const SUPPLIER_SHIP_DEFAULT   = 28
 const SUPPLIER_BUFFER_DEFAULT = 60
@@ -1164,8 +1163,12 @@ export default function Inventory() {
       const inventoryPosition = r.available + r.inbound + r.reserved_fc_transfers + r.reserved_fc_processing
       const excludedInventory = Math.max(0, totalInv - inventoryPosition)
       const fbaDoc = r.avg_daily_units > 0 ? Math.floor(inventoryPosition / r.avg_daily_units) : null
-      const targetUnits = r.avg_daily_units > 0 ? Math.ceil(fbaTarget * r.avg_daily_units) : 0
-      const unitsToSend = Math.max(0, targetUnits - inventoryPosition)
+      const { targetUnits, unitsToSend } = calculateFbaShipment({
+        dailyRate: r.avg_daily_units,
+        available: r.available,
+        moving: r.inbound + r.reserved_fc_transfers + r.reserved_fc_processing,
+        targetDays: fbaTarget,
+      })
       const urgency: FbaReplenRow['urgency'] =
         fbaDoc === null ? 'healthy' :
         fbaDoc <= fbaLeadDays ? 'critical' :
