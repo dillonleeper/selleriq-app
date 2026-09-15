@@ -29,6 +29,17 @@ const MAX_FORECAST_DAYS       = 365
 const FORECAST_HISTORY_DAYS   = 14
 const TABLE_PAGE_SIZE         = 50
 
+// ─── Replenishment demand rate ──────────────────────────────
+// avg/day is a median of daily sales over days the SKU was actually in
+// stock (fulfillable_quantity > 0) — not a straight mean over calendar
+// days. That fixes two biases a plain last-30-days average has: dividing
+// by elapsed days instead of sellable days understates demand right after
+// a stockout, and a straight mean lets a single BFCM/Prime Day spike
+// inflate the rate for weeks afterward. See computeReplenishmentRate.
+const PRIMARY_LOOKBACK_DAYS  = 30 // preferred window
+const FALLBACK_LOOKBACK_DAYS = 60 // used when the primary window doesn't have enough in-stock days to trust
+const MIN_IN_STOCK_DAYS      = 7  // below this, even the fallback window is flagged low-confidence
+
 type TabType = 'inventory' | 'fba' | 'supplier'
 
 // ─── Types ───────────────────────────────────────────────────
@@ -48,6 +59,9 @@ type InventoryRow = {
   total_fba: number
   unsellable: number
   avg_daily_units: number
+  in_stock_days: number
+  avg_window_days: number
+  low_confidence: boolean
   days_of_cover: number | null
   status: 'out_of_stock' | 'critical' | 'low' | 'healthy'
   snapshot_date: string
@@ -71,6 +85,7 @@ type FbaReplenRow = {
   excluded_inventory: number
   target_units: number
   avg_daily_units: number
+  low_confidence: boolean
   days_of_cover: number | null
   units_to_send: number
   urgency: 'critical' | 'reorder' | 'healthy'
@@ -96,6 +111,12 @@ type InventoryVelocityRpcRow = {
   series: Array<{ d: string; units: number | string }> | null
 }
 
+type InventoryStockDaysRpcRow = {
+  sku: string
+  marketplace: string
+  stock_days: string[] | null
+}
+
 type SupplierReplenRow = {
   sku: string
   title: string
@@ -105,6 +126,7 @@ type SupplierReplenRow = {
   warehouse_total: number                                // sum across active whs
   total_inventory: number                                // total_fba + warehouse_total
   avg_daily_units: number
+  low_confidence: boolean
   days_of_cover_total: number | null
   units_to_order: number
   reorder_by: string | null
@@ -171,6 +193,50 @@ function dateKeyFromDate(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+function median(values: number[]): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+type ReplenishmentRate = {
+  rate: number
+  inStockDays: number
+  windowDays: number
+  lowConfidence: boolean
+}
+// Builds the in-stock-day sample for a window ending on endDate, then takes
+// the median instead of a mean so a promo spike (BFCM, Prime Day) doesn't
+// drag the rate up for weeks — stockout days are already excluded from the
+// sample entirely (they're not in stockDays), rather than counted as 0
+// demand, which is what fixes the post-restock understatement.
+function buildInStockSample(stockDays: Set<string> | undefined, dailyUnits: Record<string, number> | undefined, endDate: string, windowDays: number): number[] {
+  if (!stockDays || stockDays.size === 0) return []
+  const start = new Date(`${endDate}T00:00:00`)
+  start.setDate(start.getDate() - (windowDays - 1))
+  const startKey = dateKeyFromDate(start)
+  const values: number[] = []
+  stockDays.forEach(d => {
+    if (d >= startKey && d <= endDate) values.push(dailyUnits?.[d] ?? 0)
+  })
+  return values
+}
+function computeReplenishmentRate(stockDays: Set<string> | undefined, dailyUnits: Record<string, number> | undefined, endDate: string): ReplenishmentRate {
+  const primary = buildInStockSample(stockDays, dailyUnits, endDate, PRIMARY_LOOKBACK_DAYS)
+  if (primary.length >= MIN_IN_STOCK_DAYS) {
+    return { rate: median(primary), inStockDays: primary.length, windowDays: PRIMARY_LOOKBACK_DAYS, lowConfidence: false }
+  }
+  const fallback = buildInStockSample(stockDays, dailyUnits, endDate, FALLBACK_LOOKBACK_DAYS)
+  return {
+    rate: median(fallback),
+    inStockDays: fallback.length,
+    windowDays: FALLBACK_LOOKBACK_DAYS,
+    // Even the wider window doesn't have enough in-stock history to trust —
+    // e.g. a SKU just back from a long OOS stretch, or a brand-new launch.
+    // The rate is still the best estimate we have, just flagged as thin.
+    lowConfidence: fallback.length < MIN_IN_STOCK_DAYS,
+  }
 }
 function exportCSV(headers: string[], rows: (string | number)[][], filename: string) {
   const escapeField = (val: string | number) => {
@@ -703,7 +769,7 @@ export default function Inventory() {
   const [fbaSortDir, setFbaSortDir]   = useState<SortDir>('desc')
   const [supSortKey, setSupSortKey]   = useState<SupplierSortKey>('units_to_order')
   const [supSortDir, setSupSortDir]   = useState<SortDir>('desc')
-  const [fbaFilter, setFbaFilter]     = useState<string>('all')
+  const [fbaFilter, setFbaFilter]     = useState<'recommended' | 'all'>('recommended')
   const [supFilter, setSupFilter]     = useState<string>('all')
   const [snapshotDate, setSnapshotDate] = useState<string>('')
   const [snapshotDates, setSnapshotDates] = useState<Record<string, string>>({})
@@ -714,6 +780,13 @@ export default function Inventory() {
   const [inventoryPage, setInventoryPage]     = useState(0)
   const [fbaPage, setFbaPage]                 = useState(0)
   const [supplierPage, setSupplierPage]       = useState(0)
+
+  // Shipment selection for FBA Replenishment — separate from `selectedProducts`
+  // (that one filters which SKUs show across tabs; this one is "what goes on
+  // the next shipment"). Keyed by `${sku}__${marketplace}`, value is the
+  // quantity to send, snapshotted at selection time so it doesn't silently
+  // drift if the underlying recommendation changes while it's sitting selected.
+  const [fbaSelection, setFbaSelection] = useState<Record<string, number>>({})
 
   // Search state — checkbox multi-select (same pattern as Sales Overview)
   const [searchQuery, setSearchQuery]       = useState('')
@@ -973,15 +1046,19 @@ export default function Inventory() {
       if (inventoryError) throw inventoryError
       const invData = inventoryResults.flatMap(result => result.data || [])
 
-      const thirtyDaysAgo = new Date()
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 37)
-      const cutoff = thirtyDaysAgo.toISOString().split('T')[0]
+      // Cutoff covers the wider fallback window (used when a SKU doesn't
+      // have enough in-stock days in the primary 30-day window) plus a
+      // week's buffer, same margin the old 30-day-only fetch used.
+      const cutoffDate = new Date()
+      cutoffDate.setDate(cutoffDate.getDate() - (FALLBACK_LOOKBACK_DAYS + 7))
+      const cutoff = cutoffDate.toISOString().split('T')[0]
 
-      const { data: velocityData, error: velocityError } = await supabase.rpc(
-        'get_inventory_sales_velocity',
-        { p_start: cutoff, p_markets: markets },
-      )
+      const [{ data: velocityData, error: velocityError }, { data: stockDaysData, error: stockDaysError }] = await Promise.all([
+        supabase.rpc('get_inventory_sales_velocity', { p_start: cutoff, p_markets: markets }),
+        supabase.rpc('get_inventory_stock_days', { p_start: cutoff, p_markets: markets }),
+      ])
       if (velocityError) throw velocityError
+      if (stockDaysError) throw stockDaysError
       if (cancelled) return
       const salesData = ((velocityData || []) as InventoryVelocityRpcRow[]).flatMap(row =>
         ((row.series as Array<{ d: string; units: number | string }>) || []).map(point => ({
@@ -991,6 +1068,16 @@ export default function Inventory() {
           start_date: point.d,
         })),
       )
+      // Days a SKU had fulfillable inventory, per sku+marketplace — the
+      // sample computeReplenishmentRate draws its median from. Stockout
+      // days (and days with no snapshot at all) are simply absent, not
+      // counted as 0 demand.
+      const stockDaysBySkuMarket: Record<string, Set<string>> = {}
+      for (const row of ((stockDaysData || []) as InventoryStockDaysRpcRow[])) {
+        if (!row.sku) continue
+        const key = `${row.sku}__${row.marketplace}`
+        stockDaysBySkuMarket[key] = new Set(row.stock_days || [])
+      }
 
       const LOOKBACK_DAYS = 30
       const velocityStartByMarket = Object.fromEntries(Object.entries(datesByMarket).map(([marketplace, endDate]) => {
@@ -1000,13 +1087,10 @@ export default function Inventory() {
       }))
       const isInVelocityWindow = (marketplace: string, date: string) =>
         date >= velocityStartByMarket[marketplace] && date <= datesByMarket[marketplace]
-      const salesBySku: Record<string, { total: number }> = {}
       const dailySalesBySku: Record<string, Record<string, number>> = {}
       for (const row of salesData || []) {
         if (!row.sku) continue
         const key = `${row.sku}__${row.marketplace}`
-        if (!salesBySku[key]) salesBySku[key] = { total: 0 }
-        if (isInVelocityWindow(row.marketplace, row.start_date)) salesBySku[key].total += row.units_ordered || 0
         if (!dailySalesBySku[key]) dailySalesBySku[key] = {}
         dailySalesBySku[key][row.start_date] = (dailySalesBySku[key][row.start_date] || 0) + (row.units_ordered || 0)
       }
@@ -1047,9 +1131,9 @@ export default function Inventory() {
 
       const rows: InventoryRow[] = (invData || []).map(row => {
         const key = `${row.sku}__${row.marketplace}`
-        const salesInfo = salesBySku[key]
-        const totalUnits = salesInfo?.total || 0
-        const avgDailyUnits = totalUnits / LOOKBACK_DAYS
+        const endDate = datesByMarket[row.marketplace]
+        const replenishment = computeReplenishmentRate(stockDaysBySkuMarket[key], dailySalesBySku[key], endDate)
+        const avgDailyUnits = replenishment.rate
         const available  = row.available_quantity || 0
         const fulfillable = row.fulfillable_quantity || 0
         const inbound    = row.total_inbound_quantity || 0
@@ -1099,6 +1183,9 @@ export default function Inventory() {
           total_fba:     totalFba,
           unsellable,
           avg_daily_units: Math.round(avgDailyUnits * 10) / 10,
+          in_stock_days: replenishment.inStockDays,
+          avg_window_days: replenishment.windowDays,
+          low_confidence: replenishment.lowConfidence,
           days_of_cover: doc,
           status:        getStatus(fulfillable, doc),
           snapshot_date: row.snapshot_date,
@@ -1157,7 +1244,7 @@ export default function Inventory() {
   const visibleInventoryRows = filtered.slice(0, (inventoryPage + 1) * TABLE_PAGE_SIZE)
 
   // ─── FBA rows ─────────────────────────────────────────────
-  const fbaRows: FbaReplenRow[] = inventory
+  const fbaRowsBase: FbaReplenRow[] = inventory
     .map(r => {
       const totalInv = r.total_fba
       const inventoryPosition = r.available + r.inbound + r.reserved_fc_transfers + r.reserved_fc_processing
@@ -1169,8 +1256,13 @@ export default function Inventory() {
         moving: r.inbound + r.reserved_fc_transfers + r.reserved_fc_processing,
         targetDays: fbaTarget,
       })
+      // A row only counts as Critical/Reorder if there's an actual positive
+      // quantity to send once rounded — otherwise a slow-mover can sit under
+      // the coverage target on paper (fbaDoc < fbaTarget) while the real
+      // shortfall rounds down to 0, which used to show an urgent-looking
+      // badge next to a "—" with nothing to actually ship.
       const urgency: FbaReplenRow['urgency'] =
-        fbaDoc === null ? 'healthy' :
+        fbaDoc === null || unitsToSend === 0 ? 'healthy' :
         fbaDoc <= fbaLeadDays ? 'critical' :
         fbaDoc < fbaTarget ? 'reorder' : 'healthy'
       return {
@@ -1185,17 +1277,23 @@ export default function Inventory() {
         excluded_inventory: excludedInventory,
         target_units: targetUnits,
         avg_daily_units: r.avg_daily_units,
+        low_confidence: r.low_confidence,
         days_of_cover: fbaDoc,
         units_to_send: unitsToSend,
         urgency,
       }
     })
-    .filter(r => r.urgency !== 'healthy' || r.units_to_send > 0)
-    .filter(r => {
-      if (fbaFilter !== 'all' && r.urgency !== fbaFilter) return false
-      if (selectedProducts.length > 0 && !selectedProducts.some(s => s.sku === r.sku)) return false
-      return true
-    })
+    // Search selection applies regardless of which tab is active.
+    .filter(r => selectedProducts.length === 0 || selectedProducts.some(s => s.sku === r.sku))
+
+  const fbaRecommendedCount = fbaRowsBase.filter(r => r.urgency !== 'healthy').length
+  const fbaAllCount = fbaRowsBase.length
+  // 'recommended' (default) = what the model thinks needs to ship.
+  // 'all' = the entire catalog — a SKU coming back from a long OOS stretch,
+  // or a brand-new launch with no sales history yet, won't compute a
+  // recommendation but still needs to be findable and selectable here.
+  const fbaRows: FbaReplenRow[] = fbaRowsBase
+    .filter(r => fbaFilter === 'all' || r.urgency !== 'healthy')
     .sort((a, b) => {
       const av = (a as any)[fbaSortKey] ?? (fbaSortDir === 'asc' ? Infinity : -Infinity)
       const bv = (b as any)[fbaSortKey] ?? (fbaSortDir === 'asc' ? Infinity : -Infinity)
@@ -1203,6 +1301,77 @@ export default function Inventory() {
       return fbaSortDir === 'asc' ? av - bv : bv - av
     })
   const visibleFbaRows = fbaRows.slice(0, (fbaPage + 1) * TABLE_PAGE_SIZE)
+
+  // ─── FBA shipment selection ─────────────────────────────────
+  const fbaSelectionKey = (row: { sku: string; marketplace: string }) => `${row.sku}__${row.marketplace}`
+  const toggleFbaSelection = (row: FbaReplenRow) => {
+    setFbaSelection(prev => {
+      const key = fbaSelectionKey(row)
+      if (key in prev) {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      }
+      return { ...prev, [key]: row.units_to_send }
+    })
+  }
+  const selectAllFbaRows = (rows: FbaReplenRow[]) => {
+    setFbaSelection(prev => {
+      const next = { ...prev }
+      rows.forEach(r => { next[fbaSelectionKey(r)] = r.units_to_send })
+      return next
+    })
+  }
+  const clearFbaSelection = () => setFbaSelection({})
+  const fbaSelectedRows = fbaRows.filter(r => fbaSelectionKey(r) in fbaSelection)
+  const fbaSelectionCount = fbaSelectedRows.length
+  const fbaSelectionUnits = fbaSelectedRows.reduce((sum, r) => sum + (fbaSelection[fbaSelectionKey(r)] ?? r.units_to_send), 0)
+  // Header checkbox acts on the full current tab + search selection, not
+  // just the paginated page — that's the "select all" a user expects from
+  // a table header, and replaces the old standalone "Select all N filtered"
+  // button.
+  const allFilteredFbaSelected = fbaRows.length > 0 && fbaRows.every(r => fbaSelectionKey(r) in fbaSelection)
+
+  // Rows to act on for export: the explicit selection when there is one,
+  // otherwise every row matching the current filter (old "export what I see"
+  // behavior, kept as the fallback so nothing breaks if selection is unused).
+  const fbaExportRows = fbaSelectionCount > 0 ? fbaSelectedRows : fbaRows
+
+  async function exportFbaToAmazon() {
+    const rows = fbaExportRows
+    if (rows.length === 0) {
+      alert('Nothing to export. Select SKUs, or adjust filters so Units to Send has results.')
+      return
+    }
+    const marketplaces = Array.from(new Set(rows.map(r => r.marketplace)))
+    if (marketplaces.length > 1) {
+      alert(`These SKUs span more than one marketplace (${marketplaces.join(', ')}). Amazon's Send to Amazon workflow is per-marketplace — filter or select SKUs from a single market before exporting.`)
+      return
+    }
+    try {
+      const res = await fetch('/api/inventory/fba-shipment-export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: rows.map(r => ({ sku: r.sku, quantity: fbaSelection[fbaSelectionKey(r)] ?? r.units_to_send })),
+        }),
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}))
+        alert(detail.error || 'Export failed.')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `send-to-amazon-${marketplaces[0]}-${dateKeyFromDate(new Date())}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      alert('Export failed. Check your connection and try again.')
+    }
+  }
 
   // ─── Active warehouses (single source of truth for build + render) ──
   // A warehouse is active iff at least one SKU has qty > 0 for it. Derived,
@@ -1237,6 +1406,7 @@ export default function Inventory() {
         warehouse_total: warehouseTotal,
         total_inventory: r.total_fba + warehouseTotal,
         avg_daily_units: r.avg_daily_units,
+        low_confidence: r.low_confidence,
         days_of_cover_total: null,
         units_to_order: 0,
         reorder_by: null,
@@ -1247,6 +1417,7 @@ export default function Inventory() {
       // warehouse_total stays as set on the first pass (added once per SKU).
       existing.total_fba       += r.total_fba
       existing.avg_daily_units += r.avg_daily_units
+      existing.low_confidence   = existing.low_confidence || r.low_confidence
       existing.total_inventory  = existing.total_fba + existing.warehouse_total
     }
   }
@@ -1281,7 +1452,6 @@ export default function Inventory() {
   const visibleSupplierRows = supplierRows.slice(0, (supplierPage + 1) * TABLE_PAGE_SIZE)
 
   // ─── Urgency counts ───────────────────────────────────────
-  const fbaUrgencyCounts = fbaRows.reduce((acc, r) => { acc[r.urgency] = (acc[r.urgency] || 0) + 1; return acc }, {} as Record<string, number>)
   const supUrgencyCounts = supplierRows.reduce((acc, r) => { acc[r.urgency] = (acc[r.urgency] || 0) + 1; return acc }, {} as Record<string, number>)
 
   // ─── Table styles ─────────────────────────────────────────
@@ -1454,7 +1624,7 @@ export default function Inventory() {
                         <th title="Units held by Amazon and unavailable to sell. Sourced from the Reserved Inventory report: customer orders + FC transfers + FC processing." style={{ ...thSortable(sortKey === 'reserved'), textAlign: 'right' }} onClick={() => handleSort('reserved')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Reserved <SortIcon col="reserved" cur={sortKey} dir={sortDir} /></span>
                         </th>
-                        <th title="Average daily units sold over the last 30 days, calculated from the Sales & Traffic report (units_ordered ÷ 30)." style={{ ...thSortable(sortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSort('avg_daily_units')}>
+                        <th title="Median daily units sold on days the SKU was in stock, over the last 30 days (widening to 60 if there aren't enough in-stock days). Stockout days are excluded rather than counted as 0, and the median resists BFCM/Prime Day-style spikes that would skew a straight average." style={{ ...thSortable(sortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={sortKey} dir={sortDir} /></span>
                         </th>
                         <th title="How many days of stock remain at the current sales pace. Formula: Total FBA ÷ Avg/Day, rounded to whole days." style={{ ...thSortable(sortKey === 'days_of_cover'), textAlign: 'right' }} onClick={() => handleSort('days_of_cover')}>
@@ -1481,7 +1651,13 @@ export default function Inventory() {
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.fulfillable)}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.reserved > 0 ? fmt(row.reserved) : '—'}</td>
-                            <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
+                            <td
+                              style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}
+                              title={row.low_confidence ? 'Limited in-stock sales history — this rate may not be reliable yet.' : undefined}
+                            >
+                              {row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}
+                              {row.low_confidence && <span style={{ color: 'var(--yellow)' }}> *</span>}
+                            </td>
                             <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                               {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
                                 <span style={{ fontWeight: 600, color: row.status === 'out_of_stock' ? 'var(--red)' : row.status === 'critical' ? '#F97316' : row.status === 'low' ? 'var(--yellow)' : 'var(--green)' }}>
@@ -1613,21 +1789,63 @@ export default function Inventory() {
                     </div>
                   )}
                 </div>
-                <UrgencyFilter counts={fbaUrgencyCounts} current={fbaFilter} onChange={setFbaFilter} />
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {([
+                    { value: 'recommended' as const, label: 'Recommended Replenishment', count: fbaRecommendedCount },
+                    { value: 'all' as const, label: 'All', count: fbaAllCount },
+                  ]).map(o => (
+                    <button key={o.value} onClick={() => setFbaFilter(o.value)} style={{
+                      padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500,
+                      cursor: 'pointer', border: fbaFilter === o.value ? '1px solid var(--accent-border)' : '1px solid var(--border)',
+                      background: fbaFilter === o.value ? 'var(--accent-light)' : 'transparent',
+                      color: fbaFilter === o.value ? 'var(--accent)' : 'var(--text-muted)',
+                    }}>
+                      {o.label} ({o.count})
+                    </button>
+                  ))}
+                </div>
                 <button onClick={() => exportCSV(
                   ['SKU', 'Title', 'Marketplace', 'Fulfillable', 'Inbound', 'Reserved', 'Total FBA', 'Avg Daily Units', 'Days Cover', 'Units to Send', 'Urgency'],
   		  fbaRows.map(r => [r.sku, r.title, r.marketplace, r.fulfillable, r.inbound, r.reserved, r.total_inventory, r.avg_daily_units, r.days_of_cover ?? '', r.units_to_send, r.urgency]),
   		  'selleriq-fba-replenishment.csv'
                 )} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
-                  <Download size={12} /> Export
+                  <Download size={12} /> Export CSV
+                </button>
+                <button onClick={exportFbaToAmazon} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--accent-border)', background: 'var(--accent-light)', color: 'var(--accent)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                  <Send size={12} /> Send to Amazon{fbaSelectionCount > 0 ? ` (${fbaSelectionCount})` : ''}
                 </button>
               </div>
+
+              {fbaSelectionCount > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', padding: '8px 14px', background: 'var(--accent-light)', border: '1px solid var(--accent-border)', borderRadius: '8px', fontSize: '12px', color: 'var(--accent)' }}>
+                  <span style={{ fontWeight: 600 }}>{fbaSelectionCount} SKU{fbaSelectionCount === 1 ? '' : 's'} selected</span>
+                  <span style={{ color: 'var(--text-muted)' }}>·</span>
+                  <span>{fmt(fbaSelectionUnits)} units total</span>
+                  <button onClick={clearFbaSelection} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', padding: 0 }}>
+                    <X size={10} /> Clear selection
+                  </button>
+                </div>
+              )}
 
               <div className="card" style={{ overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
+                        <th style={{ ...thBase, width: '32px', textAlign: 'center' }} title="Select all rows in this tab, not just this page">
+                          <div
+                            role="checkbox"
+                            aria-checked={allFilteredFbaSelected}
+                            onClick={() => allFilteredFbaSelected ? setFbaSelection(prev => {
+                              const next = { ...prev }
+                              fbaRows.forEach(r => { delete next[fbaSelectionKey(r)] })
+                              return next
+                            }) : selectAllFbaRows(fbaRows)}
+                            style={{ width: '14px', height: '14px', margin: '0 auto', borderRadius: '4px', cursor: 'pointer', border: `1px solid ${allFilteredFbaSelected ? 'var(--accent)' : 'var(--border)'}`, background: allFilteredFbaSelected ? 'var(--accent)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          >
+                            {allFilteredFbaSelected && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                          </div>
+                        </th>
                         <th style={{ ...thBase, textAlign: 'left', minWidth: '240px' }}>Product</th>
                         <th style={{ ...thBase, textAlign: 'center' }}>Urgency</th>
                         <th style={{ ...thBase, textAlign: 'center' }}>Mkt</th>
@@ -1637,7 +1855,7 @@ export default function Inventory() {
                         <th style={{ ...thSortable(fbaSortKey === 'inbound'), textAlign: 'right' }} onClick={() => handleFbaSort('inbound')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Inbound <SortIcon col="inbound" cur={fbaSortKey} dir={fbaSortDir} /></span>
                         </th>
-                        <th style={{ ...thSortable(fbaSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleFbaSort('avg_daily_units')}>
+                        <th title="Median daily units sold on days the SKU was in stock, over the last 30 days (widening to 60 if there aren't enough in-stock days). Stockout days are excluded rather than counted as 0, and the median resists BFCM/Prime Day-style spikes that would skew a straight average. A dotted underline means low confidence — not enough in-stock history yet." style={{ ...thSortable(fbaSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleFbaSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={fbaSortKey} dir={fbaSortDir} /></span>
                         </th>
                         <th style={{ ...thSortable(fbaSortKey === 'days_of_cover'), textAlign: 'right' }} onClick={() => handleFbaSort('days_of_cover')}>
@@ -1661,6 +1879,16 @@ export default function Inventory() {
                               onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)' }}
                               onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLTableRowElement).style.background = 'transparent' }}
                             >
+                              <td style={{ padding: '11px 12px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                                <div
+                                  role="checkbox"
+                                  aria-checked={fbaSelectionKey(row) in fbaSelection}
+                                  onClick={() => toggleFbaSelection(row)}
+                                  style={{ width: '14px', height: '14px', margin: '0 auto', borderRadius: '4px', cursor: 'pointer', border: `1px solid ${fbaSelectionKey(row) in fbaSelection ? 'var(--accent)' : 'var(--border)'}`, background: fbaSelectionKey(row) in fbaSelection ? 'var(--accent)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                >
+                                  {fbaSelectionKey(row) in fbaSelection && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                </div>
+                              </td>
                               <td style={{ padding: '11px 12px' }}>
                                 <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{truncate(row.title, 45)}</div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace' }}>{row.sku}</div>
@@ -1671,7 +1899,13 @@ export default function Inventory() {
                               <td style={{ padding: '11px 12px', textAlign: 'center', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.marketplace}</td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.inbound > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{row.inbound > 0 ? fmt(row.inbound) : '—'}</td>
-                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
+                              <td
+                                style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}
+                                title={row.low_confidence ? 'Limited in-stock sales history — this rate may not be reliable yet.' : undefined}
+                              >
+                                {row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}
+                                {row.low_confidence && <span style={{ color: 'var(--yellow)' }}> *</span>}
+                              </td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                                 {row.days_of_cover === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
                                   <span style={{ fontWeight: 600, color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' }}>{row.days_of_cover}d</span>
@@ -1686,7 +1920,7 @@ export default function Inventory() {
                             </tr>
                             {isExpanded && (
                               <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                <td colSpan={9} style={{ padding: 0, background: 'var(--accent-light)' }}>
+                                <td colSpan={10} style={{ padding: 0, background: 'var(--accent-light)' }}>
                                   <FbaDecisionPanel
                                     row={row}
                                     targetDays={fbaTarget}
@@ -1896,7 +2130,7 @@ export default function Inventory() {
                           <th key={w.id} style={{ ...thBase, textAlign: 'right', color: '#A78BFA' }}>{w.label}</th>
                         ))}
                         <th style={{ ...thBase, textAlign: 'right', fontWeight: 700 }}>Total Inv</th>
-                        <th style={{ ...thSortable(supSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSupSort('avg_daily_units')}>
+                        <th title="Median daily units sold on days the SKU was in stock, over the last 30 days (widening to 60 if there aren't enough in-stock days). Stockout days are excluded rather than counted as 0, and the median resists BFCM/Prime Day-style spikes that would skew a straight average. A dotted underline means low confidence — not enough in-stock history yet." style={{ ...thSortable(supSortKey === 'avg_daily_units'), textAlign: 'right' }} onClick={() => handleSupSort('avg_daily_units')}>
                           <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>Avg/Day <SortIcon col="avg_daily_units" cur={supSortKey} dir={supSortDir} /></span>
                         </th>
                         <th style={{ ...thSortable(supSortKey === 'days_of_cover_total'), textAlign: 'right' }} onClick={() => handleSupSort('days_of_cover_total')}>
@@ -1938,7 +2172,13 @@ export default function Inventory() {
                                 return <td key={w.id} style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: q > 0 ? '#A78BFA' : 'var(--text-dim)' }}>{q > 0 ? fmt(q) : '—'}</td>
                               })}
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>{fmt(row.total_inventory)}</td>
-                              <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}</td>
+                              <td
+                                style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}
+                                title={row.low_confidence ? 'Limited in-stock sales history — this rate may not be reliable yet.' : undefined}
+                              >
+                                {row.avg_daily_units > 0 ? row.avg_daily_units.toFixed(1) : '—'}
+                                {row.low_confidence && <span style={{ color: 'var(--yellow)' }}> *</span>}
+                              </td>
                               <td style={{ padding: '11px 12px', textAlign: 'right', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' }}>
                                 {row.days_of_cover_total === null ? <span style={{ color: 'var(--text-dim)' }}>—</span> : (
                                   <span style={{ fontWeight: 600, color: row.urgency === 'critical' ? 'var(--red)' : row.urgency === 'reorder' ? '#F97316' : 'var(--green)' }}>{row.days_of_cover_total}d</span>
